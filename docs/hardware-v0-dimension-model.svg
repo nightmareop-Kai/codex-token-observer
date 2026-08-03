@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07121c"/>
+      <stop offset="1" stop-color="#111b25"/>
+    </linearGradient>
+    <style>
+      .title{font:600 24px -apple-system,BlinkMacSystemFont,sans-serif;fill:#e9f7ff}
+      .label{font:500 16px -apple-system,BlinkMacSystemFont,sans-serif;fill:#8fa6b5}
+      .dim{font:500 15px ui-monospace,monospace;fill:#73dff4}
+      .line{stroke:#73dff4;stroke-width:1.5;fill:none}
+      .guide{stroke:#50606c;stroke-width:1;stroke-dasharray:5 5}
+    </style>
+  </defs>
+  <rect width="1200" height="760" fill="#05090d"/>
+  <text x="70" y="62" class="title">Codex Token Observer · Hardware V0</text>
+  <text x="70" y="92" class="label">视觉比例冻结 / 显示模组开口待选型校准</text>
+
+  <!-- Front view, scale 5 px/mm -->
+  <text x="70" y="145" class="label">正视图</text>
+  <rect x="70" y="170" width="725" height="270" rx="60" fill="url(#body)" stroke="#344652"/>
+  <rect x="90" y="190" width="685" height="230" rx="42" fill="#071018" stroke="#1e3440"/>
+  <circle cx="645" cy="216" r="4" fill="#50e4ff"/>
+  <text x="660" y="222" class="label" style="font-size:12px;letter-spacing:2px">CODEX · TOKEN OBSERVER</text>
+  <text x="728" y="260" class="label" text-anchor="end" style="font-size:12px;letter-spacing:2px">TODAY</text>
+  <text x="728" y="306" text-anchor="end" style="font:500 31px 'Avenir Next Condensed',sans-serif;fill:#58e6ff">000 000 000 009 932 250</text>
+  <line x1="110" y1="326" x2="750" y2="326" stroke="#253641"/>
+  <text x="728" y="354" class="label" text-anchor="end" style="font-size:12px;letter-spacing:2px">TOTAL</text>
+  <text x="728" y="390" text-anchor="end" style="font:500 24px 'Avenir Next Condensed',sans-serif;fill:#58e6ff">000 000 001 218 536 980</text>
+
+  <!-- width dimension -->
+  <line x1="70" y1="470" x2="795" y2="470" class="line"/>
+  <line x1="70" y1="450" x2="70" y2="490" class="line"/>
+  <line x1="795" y1="450" x2="795" y2="490" class="line"/>
+  <text x="432" y="495" text-anchor="middle" class="dim">145 mm</text>
+
+  <!-- height dimension -->
+  <line x1="830" y1="170" x2="830" y2="440" class="line"/>
+  <line x1="810" y1="170" x2="850" y2="170" class="line"/>
+  <line x1="810" y1="440" x2="850" y2="440" class="line"/>
+  <text x="860" y="312" class="dim">54 mm</text>
+
+  <!-- Side view -->
+  <text x="70" y="570" class="label">侧视图</text>
+  <path d="M70 610 Q70 594 86 594 H779 Q795 594 795 610 V664 Q795 680 779 680 H86 Q70 680 70 664 Z" fill="url(#body)" stroke="#344652"/>
+  <rect x="735" y="622" width="34" height="12" rx="5" fill="#020507" stroke="#50606c"/>
+  <text x="735" y="616" class="label" style="font-size:12px">USB-C</text>
+  <line x1="830" y1="594" x2="830" y2="680" class="line"/>
+  <line x1="810" y1="594" x2="850" y2="594" class="line"/>
+  <line x1="810" y1="680" x2="850" y2="680" class="line"/>
+  <text x="860" y="642" class="dim">14 mm target</text>
+
+  <text x="950" y="210" class="label">V0 结构</text>
+  <text x="950" y="245" class="dim">1. 透明面板</text>
+  <text x="950" y="278" class="dim">2. 显示模组</text>
+  <text x="950" y="311" class="dim">3. 主控板</text>
+  <text x="950" y="344" class="dim">4. 3D打印后壳</text>
+  <text x="950" y="377" class="dim">5. 硅胶脚垫</text>
+</svg>
