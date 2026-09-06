@@ -53,6 +53,28 @@ def _event_from_line(line: str) -> tuple[datetime, dict] | None:
     return parse_timestamp(timestamp), usage
 
 
+def _project_from_file(path: Path) -> tuple[str, str]:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for _ in range(20):
+                line = handle.readline()
+                if not line:
+                    break
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("type") != "session_meta":
+                    continue
+                cwd = (record.get("payload") or {}).get("cwd")
+                if isinstance(cwd, str) and cwd.strip():
+                    project_path = str(Path(cwd).expanduser())
+                    return project_path, Path(project_path).name or project_path
+    except (FileNotFoundError, PermissionError, UnicodeDecodeError):
+        pass
+    return "", "UNKNOWN"
+
+
 def scan_sessions(
     *, store: TokenStore, sessions_root: Path, installed_at: datetime
 ) -> ScanResult:
@@ -65,8 +87,10 @@ def scan_sessions(
     for path in iter_session_files(sessions_root):
         files_scanned += 1
         try:
+            project_path, project_name = _project_from_file(path)
             with path.open("rb") as handle:
                 session_path = str(path.resolve())
+                store.set_session_project(session_path, project_path, project_name)
                 cursor = store.get_file_cursor(session_path)
                 file_size = path.stat().st_size
                 if cursor > file_size:
@@ -76,6 +100,12 @@ def scan_sessions(
                     offset = handle.tell()
                     raw = handle.readline()
                     if not raw:
+                        break
+                    if not raw.endswith(b"\n"):
+                        # A live session can be observed between writes. Keep the
+                        # cursor at this line's start until its JSONL terminator
+                        # arrives, including when a UTF-8 character is split.
+                        handle.seek(offset)
                         break
                     lines_scanned += 1
                     try:
@@ -106,6 +136,8 @@ def scan_sessions(
                         reasoning_output_tokens=int(
                             usage.get("reasoning_output_tokens", 0) or 0
                         ),
+                        project_path=project_path,
+                        project_name=project_name,
                     )
                     if added:
                         token_events_added += 1

@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .collector import parse_timestamp, scan_sessions
+from .project_names import load_project_labels
 from .storage import TokenStore
 
 
@@ -107,21 +108,44 @@ def stream(args: argparse.Namespace) -> int:
     try:
         installed_at_text = store.ensure_initialized(datetime.now().astimezone())
         installed_at = parse_timestamp(installed_at_text)
-        previous: tuple[int, int, int, str | None] | None = None
+        previous: tuple | None = None
         while True:
             scan_sessions(
                 store=store,
                 sessions_root=Path(args.sessions).expanduser().resolve(),
                 installed_at=installed_at,
             )
-            totals = store.totals(datetime.now().astimezone())
-            snapshot = (totals.today, totals.total, totals.event_count, totals.last_event_at)
+            now = datetime.now().astimezone()
+            totals = store.totals(now)
+            labels = load_project_labels(Path(args.sessions).expanduser().resolve().parent)
+            projects = store.top_projects(None, now=now, order_by="today", project_labels=labels)
+            quota = None
+            if getattr(args, "account_quota", False):
+                from .quota import poll_weekly_quota
+
+                quota = poll_weekly_quota(store, now=now)
+            project_snapshot = tuple(
+                (project.path, project.name, project.total, project.today)
+                for project in projects
+            )
+            snapshot = (totals.today, totals.total, totals.event_count, totals.last_event_at,
+                        project_snapshot, json.dumps(quota, sort_keys=True))
             if snapshot != previous:
                 print(json.dumps({
                     "today": totals.today,
                     "total": totals.total,
                     "event_count": totals.event_count,
                     "last_event_at": totals.last_event_at,
+                    "quota": quota,
+                    "projects": [
+                        {
+                            "name": project.name,
+                            "path": project.path,
+                            "total": project.total,
+                            "today": project.today,
+                        }
+                        for project in projects
+                    ],
                 }, separators=(",", ":")), flush=True)
                 previous = snapshot
             time.sleep(args.interval)
@@ -164,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--interval", type=float, default=0.75)
     stream_parser = subparsers.add_parser("stream", help="Continuously emit JSON snapshots")
     stream_parser.add_argument("--interval", type=float, default=0.5)
+    stream_parser.add_argument("--account-quota", action="store_true", help="Read signed-in Codex weekly quota")
     simulate_parser = subparsers.add_parser("simulate", help="Add a synthetic token event")
     simulate_parser.add_argument("tokens", type=int)
     return parser

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Mapping
 
 
 @dataclass(frozen=True)
@@ -12,6 +14,14 @@ class Totals:
     total: int
     event_count: int
     last_event_at: str | None
+
+
+@dataclass(frozen=True)
+class ProjectTotal:
+    name: str
+    path: str
+    total: int
+    today: int
 
 
 class TokenStore:
@@ -60,6 +70,18 @@ class TokenStore:
             );
             """
         )
+        columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(usage_events)")
+        }
+        if "project_path" not in columns:
+            self.connection.execute(
+                "ALTER TABLE usage_events ADD COLUMN project_path TEXT NOT NULL DEFAULT ''"
+            )
+        if "project_name" not in columns:
+            self.connection.execute(
+                "ALTER TABLE usage_events ADD COLUMN project_name TEXT NOT NULL DEFAULT 'UNKNOWN'"
+            )
         self.connection.commit()
 
     def get_file_cursor(self, session_path: str) -> int:
@@ -121,6 +143,8 @@ class TokenStore:
         cached_input_tokens: int = 0,
         output_tokens: int = 0,
         reasoning_output_tokens: int = 0,
+        project_path: str = "",
+        project_name: str = "UNKNOWN",
     ) -> bool:
         local_time = occurred_at.astimezone()
         cursor = self.connection.execute(
@@ -128,8 +152,8 @@ class TokenStore:
             INSERT OR IGNORE INTO usage_events(
                 event_id, occurred_at, local_date, session_path, byte_offset,
                 total_tokens, input_tokens, cached_input_tokens, output_tokens,
-                reasoning_output_tokens, created_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reasoning_output_tokens, created_at, project_path, project_name
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
@@ -143,10 +167,71 @@ class TokenStore:
                 int(output_tokens),
                 int(reasoning_output_tokens),
                 datetime.now().astimezone().isoformat(),
+                project_path,
+                project_name,
             ),
         )
         self.connection.commit()
         return cursor.rowcount == 1
+
+    def set_session_project(self, session_path: str, project_path: str, project_name: str) -> None:
+        self.connection.execute(
+            """
+            UPDATE usage_events
+            SET project_path = ?, project_name = ?
+            WHERE session_path = ? AND (project_path = '' OR project_name = 'UNKNOWN')
+            """,
+            (project_path, project_name, session_path),
+        )
+        self.connection.commit()
+
+    def top_projects(
+        self,
+        limit: int | None = 3,
+        *,
+        now: datetime | None = None,
+        order_by: str = "total",
+        project_labels: Mapping[str, str] | None = None,
+    ) -> list[ProjectTotal]:
+        """Rank projects by total or today's usage; ``None`` includes every project."""
+        if order_by not in {"total", "today"}:
+            raise ValueError("order_by must be 'total' or 'today'")
+        today = (now or datetime.now().astimezone()).astimezone().date().isoformat()
+        rows = self.connection.execute(
+            """
+            SELECT project_path, SUM(total_tokens) AS total,
+                SUM(CASE WHEN local_date = ? THEN total_tokens ELSE 0 END) AS today
+            FROM usage_events
+            GROUP BY project_path
+            """,
+            (today,),
+        ).fetchall()
+        labels = project_labels or {}
+
+        def display_name(path: str) -> str:
+            if not path:
+                return "UNKNOWN"
+            label = labels.get(os.path.normpath(os.path.expanduser(path)))
+            if isinstance(label, str) and label.strip():
+                return label.strip()
+            return Path(path).name or path
+
+        # Names are presentation metadata, never part of a project's identity.
+        # Keep original paths distinct, even when their visible labels match.
+        projects = [
+            ProjectTotal(
+                name=display_name(str(row["project_path"])),
+                path=str(row["project_path"]),
+                total=int(row["total"]),
+                today=int(row["today"]),
+            )
+            for row in rows
+        ]
+        if order_by == "today":
+            projects.sort(key=lambda item: (-item.today, -item.total, item.name.casefold(), item.path))
+        else:
+            projects.sort(key=lambda item: (-item.total, item.name.casefold(), item.path))
+        return projects if limit is None or int(limit) < 0 else projects[:int(limit)]
 
     def totals(self, now: datetime) -> Totals:
         today = now.astimezone().date().isoformat()

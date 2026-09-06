@@ -1,0 +1,106 @@
+name: Build and verify Windows release
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Python for source tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Test counter and quota logic
+        run: |
+          New-Item -ItemType Directory -Path .qa/windows-ci -Force | Out-Null
+          $env:PYTHONPATH = Join-Path $PWD 'src'
+          python -B -m unittest discover -s tests -v 2>&1 | Tee-Object .qa/windows-ci/python-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Python tests failed.' }
+
+      - name: Build self-contained Windows package
+        run: ./windows-observer/build-release.ps1
+
+      - name: Verify downloaded-package behavior and render smoke previews
+        timeout-minutes: 3
+        run: |
+          $archives = @(Get-ChildItem -LiteralPath release -Filter '*-windows-x64.zip' -File)
+          if ($archives.Count -ne 1) { throw 'Expected exactly one Windows release ZIP.' }
+          $archive = $archives[0]
+          $checksum = (Get-Content -LiteralPath "$($archive.FullName).sha256" -Raw).Trim()
+          $actualHash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($checksum -ne "$actualHash  $($archive.Name)") { throw 'Release checksum or basename does not match.' }
+          $extraction = Join-Path $env:RUNNER_TEMP ('observer-unzip-' + [Guid]::NewGuid().ToString('N'))
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath $extraction
+          $executables = @(Get-ChildItem -LiteralPath $extraction -Filter CodexTokenObserver.exe -Recurse -File)
+          if ($executables.Count -ne 1) { throw 'Expected one application executable.' }
+          $output = Join-Path $PWD '.qa/windows-smoke'
+          New-Item -ItemType Directory -Path $output -Force | Out-Null
+          $process = Start-Process -FilePath $executables[0].FullName `
+            -ArgumentList @('--smoke-test', ('"' + $output + '"')) `
+            -WorkingDirectory $executables[0].DirectoryName -PassThru `
+            -RedirectStandardOutput (Join-Path $output 'stdout.log') `
+            -RedirectStandardError (Join-Path $output 'stderr.log')
+          if (-not $process.WaitForExit(90000)) {
+            $process.Kill($true)
+            throw 'The packaged app smoke test timed out.'
+          }
+          $process.Refresh()
+          if ($process.ExitCode -ne 0) { throw "Packaged app smoke test failed: $($process.ExitCode)" }
+          if (@(Get-ChildItem -LiteralPath $output -Filter '*.png' -File).Count -eq 0) {
+            throw 'The packaged app did not produce a visual smoke preview.'
+          }
+
+      - name: Upload verified Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-token-observer-windows-x64
+          path: |
+            release/*-windows-x64.zip
+            release/*-windows-x64.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Upload screenshots and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-and-diagnostics
+          path: |
+            .qa/windows-ci/
+            .qa/windows-build/
+            .qa/windows-smoke/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

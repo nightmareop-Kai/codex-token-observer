@@ -7,3 +7,5 @@ release/
 desktop-observer/.build/
 .qa/
 .DS_Store
+windows-observer/bin/
+windows-observer/obj/
