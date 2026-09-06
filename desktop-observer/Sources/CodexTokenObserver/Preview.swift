@@ -45,6 +45,26 @@ enum ObserverPreview {
             try render(name: "carry", directory: directory, projects: [
                 ProjectSnapshot(name: "进位动画检查", path: "/preview/carry", total: 999_999.5, today: 99.5)
             ], background: true)
+            // Exercise the native material against both system appearances,
+            // while retaining the Classic fixtures above for comparison.
+            for scheme in [ColorScheme.light, .dark] {
+                let prefix = scheme == .light ? "mist-light" : "mist-dark"
+                try render(name: prefix, directory: directory, projects: projects,
+                           background: true, appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-expanded", directory: directory,
+                           projects: projects + extraProjects, background: true, expanded: true,
+                           appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-over-limit", directory: directory, projects: projects,
+                           background: true, quotaPercent: 127,
+                           appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-large-number", directory: directory, projects: [
+                    ProjectSnapshot(name: "大数值容量检查", path: "/preview/large",
+                                    total: 123_456_789_012_345, today: 1_234_567_890_123)
+                ], background: true, appearance: .mist, colorScheme: scheme,
+                           today: 1_234_567_890_123, total: 123_456_789_012_345)
+                try render(name: "\(prefix)-transparent", directory: directory, projects: projects,
+                           background: false, appearance: .mist, colorScheme: scheme)
+            }
         } catch {
             print("Preview failed: \(error)")
         }
@@ -53,7 +73,9 @@ enum ObserverPreview {
 
     private static func render(name: String, directory: URL, projects: [ProjectSnapshot], background: Bool,
                                quotaPercent: Double? = 46, expanded: Bool = false,
-                               connected: Bool = true, stale: Bool = false) throws {
+                               connected: Bool = true, stale: Bool = false,
+                               appearance: ObserverAppearance = .classic, colorScheme: ColorScheme = .dark,
+                               today: Double? = nil, total: Double? = nil) throws {
         let quota = quotaPercent.map { percent in
             QuotaSnapshot(available: true, currentPercent: percent.truncatingRemainder(dividingBy: 100),
                           cumulativePercent: percent, resetsAt: Date().timeIntervalSince1970 + 86400,
@@ -61,20 +83,26 @@ enum ObserverPreview {
                           stale: stale, estimated: percent > 100)
         }
         let content = ObserverContent(
-            today: projects.isEmpty ? 0 : 8_403_527,
-            total: projects.isEmpty ? 0 : 6_172_098_410,
+            today: today ?? (projects.isEmpty ? 0 : 8_403_527),
+            total: total ?? (projects.isEmpty ? 0 : 6_172_098_410),
             projects: projects.sorted { $0.today == $1.today ? $0.total > $1.total : $0.today > $1.today },
             isConnected: connected, showPanelBackground: background,
-            quota: quota, showAllProjects: expanded
+            quota: quota, showAllProjects: expanded, appearance: appearance
         )
-        .background(Color(red: 0.065, green: 0.085, blue: 0.11))
+        .environment(\.colorScheme, colorScheme)
+        .background(colorScheme == .light
+                    ? Color(red: 0.88, green: 0.90, blue: 0.93)
+                    : Color(red: 0.065, green: 0.085, blue: 0.11))
         // ImageRenderer omits AppKit-backed ScrollView content on macOS. Mount
         // the real view in an offscreen panel and cache its display instead.
         let host = NSHostingView(rootView: content)
+        let nativeAppearance = NSAppearance(named: colorScheme == .light ? .aqua : .darkAqua)
+        host.appearance = nativeAppearance
         let size = host.fittingSize
         let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
+        panel.appearance = nativeAppearance
         panel.contentView = host
         panel.setFrameOrigin(NSPoint(x: -10000, y: -10000))
         panel.orderBack(nil)

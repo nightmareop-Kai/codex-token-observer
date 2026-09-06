@@ -2,9 +2,13 @@
 
 本地优先的 macOS / Windows Codex Token 桌面观察器，显示 `TODAY`、`TOTAL` 和今日消耗最多的三个项目，使用机械里程表式数字动画。项目显示名优先匹配 Codex 侧栏名称，不再只取磁盘文件夹名。界面、菜单、提示和可访问标签统一使用英文，项目名称保留原文（包括中文），不翻译。
 
-Mac 与 Windows 的界面示例（使用模拟数据，不含个人使用记录）：
+Mac 新版 Mist 深浅色界面（使用模拟数据，不含个人使用记录）：
 
-<img src="docs/screenshots/macos-0.2.0.png" alt="Mac preview" width="300"> <img src="docs/screenshots/windows-0.2.0.png" alt="Windows preview" width="300">
+<img src="docs/screenshots/macos-0.2.1-light.png" alt="Mac Mist light preview" width="300"> <img src="docs/screenshots/macos-0.2.1-dark.png" alt="Mac Mist dark preview" width="300">
+
+Windows 本次保留现有界面：
+
+<img src="docs/screenshots/windows-0.2.0.png" alt="Windows preview — unchanged in 0.2.1" width="300">
 
 ## 系统要求
 
@@ -62,13 +66,15 @@ desktop-observer/build-app.sh
 open "dist/Codex Token Observer.app"
 ```
 
-应用默认位于桌面右下角，Token 更新时数字会滚动变化。数字带有弱化的前导零，超出预留位数后自动扩展并适配宽度。今日数字用青色、累计数字用银灰色；每周额度累计达到 100% 后，有效数字改为红色。项目名过长会换行或省略，悬停可查看完整项目名和目录。
+应用默认位于桌面右下角，Token 更新时数字会滚动变化。数字带有弱化的前导零，超出预留位数后自动扩展并适配宽度。每周额度累计达到 100% 后，有效数字改为红色。项目名过长会换行或省略，悬停可查看完整项目名和目录。
+
+Mac v0.2.1 新增右上角调色盘按钮 `Appearance`。可选择 `Mist`：原生雾面、系统字体、蓝色今日数字并跟随系统深浅色；或 `Classic`：原有深色仪表、青色今日数字和银灰累计数字。没有保存过外观选择时默认 `Mist`，选择独立保存，下次启动保留；切换不会改变统计、项目展开或手动隐藏状态。右键和菜单栏菜单也提供 `Appearance`。已有背景、跟随和演示基数偏好保持不变；`Show Translucent Background` 仍可关闭底板。Windows v0.2.1 保留现有 WPF 界面，不包含 Mac 的外观切换。
 
 项目名随每次采样从 Codex 本地项目元数据只读更新；在 Codex 中改名后，下一次采样即可同步。
 目录是统计身份，侧栏项目名是显示标签，聊天任务标题不是项目名；无法匹配时仍显示目录名。
 此更新不改写历史 Token，也不将不同目录因显示同名而合并。
 
-点击 `PROJECTS / TODAY` 或右侧 `ALL N` 展开所有已统计项目，列表可滚动；展开后右侧显示 `COLLAPSE · N`，再点同一栏收起。收起时前三名只显示 `TODAY`，展开后为前三名补充 `TOTAL`，其余项目只显示 `TOTAL`。展开和收起都保留今日排名；展开时保持窗口在屏幕内，默认向上延展，收起后恢复紧凑尺寸。
+点击 `PROJECTS / TODAY` 或右侧 `ALL N` 展开所有已统计项目，列表可滚动；展开后右侧显示 `COLLAPSE · N`，再点同一栏收起（Mist 中为 `Projects · Today` / `All N` / `Collapse`）。收起时前三名只显示今日值，展开后为前三名补充累计值，其余项目只显示累计值。展开和收起都保留今日排名；展开时保持窗口在屏幕内，默认向上延展，收起后恢复紧凑尺寸。
 
 每周额度通过本机 Codex CLI / ChatGPT.app 内置 CLI 的官方只读接口取得，使用已有登录状态。它不会执行额度重置。悬停额度条可查看当前窗口、估算说明及到期时间；接口暂时不可用时显示 `STALE` 或 `—`。桌面观察器启动时采样一次，此后每 300 秒（5 分钟）扫描并更新统计。数值变化时以约 3–5 秒的先快后慢动画滚动到新值，随后静止等待下一次采样；数值不变时不重播动画。
 
@@ -88,7 +94,7 @@ swift build
 
 ## 给朋友安装
 
-从 [v0.2.0 双平台预览版下载页](https://github.com/nightmareop-Kai/codex-token-observer/releases/tag/v0.2.0) 下载对应平台的 ZIP，不要选自动生成的 Source code。Windows 首版先以 Preview 发布，欢迎同事试用反馈。
+从 [v0.2.1 双平台预览版下载页](https://github.com/nightmareop-Kai/codex-token-observer/releases/tag/v0.2.1) 下载对应平台的 ZIP，不要选自动生成的 Source code。Windows 仍为 Preview，欢迎同事试用反馈。
 
 - Mac：解压，将 `.app` 拖入“应用程序”后打开。升级前退出旧版再替换应用。
 - Windows：完整解压，保留全部文件，双击 `CodexTokenObserver.exe`。不要仅复制 exe 或在 ZIP 中直接打开。升级前退出旧版，使用新解压的文件夹。
@@ -106,7 +112,7 @@ Windows 首版采用原生 WPF 字体，外观不保证与 Mac 逐像素一致�
 
 ```bash
 chmod +x desktop-observer/package-release.sh
-desktop-observer/package-release.sh 0.2.0
+desktop-observer/package-release.sh 0.2.1
 ```
 
 Windows 在装有 .NET 10 SDK 的 Windows 开发环境中执行 `./windows-observer/build-release.ps1`。

@@ -11,7 +11,7 @@
 Mac packaging:
 
 ```bash
-desktop-observer/package-release.sh 0.2.0
+desktop-observer/package-release.sh 0.2.1
 ```
 
 Windows packaging: `./windows-observer/build-release.ps1` (PowerShell on Windows, .NET 10 SDK).

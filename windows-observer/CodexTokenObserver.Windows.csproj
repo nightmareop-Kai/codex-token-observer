@@ -9,7 +9,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>CodexTokenObserver</AssemblyName>
     <RootNamespace>TokenObserver</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>

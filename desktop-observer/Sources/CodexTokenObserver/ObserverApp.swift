@@ -76,7 +76,8 @@ final class TokenModel: ObservableObject {
     @Published var showAllProjects = false
     @Published var followsTargetApps = UserDefaults.standard.object(forKey: "followsTargetApps") as? Bool ?? true
     @Published var isConnected = false
-    @Published var showPanelBackground = UserDefaults.standard.bool(forKey: "showPanelBackground")
+    @Published var showPanelBackground = UserDefaults.standard.object(forKey: "showPanelBackground") as? Bool ?? true
+    @Published var appearance = ObserverAppearance.load()
     @Published var demoTotalEnabled = UserDefaults.standard.bool(forKey: "demoTotalEnabled")
     private var process: Process?
     private var outputBuffer = Data()
@@ -268,6 +269,8 @@ struct OdometerDigit: View {
     let size: CGFloat
     let active: Bool
     var tint: Color = ObserverStyle.accent
+    var appearance: ObserverAppearance = .classic
+    var zeroTint: Color = ObserverStyle.zero
 
     private var wheelPosition: Double {
         let safeValue = max(0, value)
@@ -292,17 +295,17 @@ struct OdometerDigit: View {
             }
             .offset(y: -CGFloat(progress) * height)
         }
-        .frame(width: size * 0.52, height: size * 1.18)
+        .frame(width: size * appearance.digitWidth, height: size * 1.18)
         .clipped()
     }
 
     private func digitText(_ digit: Int) -> some View {
         Text(String(digit))
-            .font(.custom("Avenir Next Condensed", size: size).weight(.medium))
+            .font(appearance.digitFont(size: size))
             .monospacedDigit()
-            .foregroundStyle(active ? tint : ObserverStyle.zero)
-            .shadow(color: Color.black.opacity(0.72), radius: 1.4, y: 0.7)
-            .shadow(color: active ? tint.opacity(0.12) : .clear, radius: 4)
+            .foregroundStyle(active ? tint : zeroTint)
+            .shadow(color: appearance == .classic ? Color.black.opacity(0.72) : .clear, radius: 1.4, y: 0.7)
+            .shadow(color: appearance == .classic && active ? tint.opacity(0.12) : .clear, radius: 4)
     }
 }
 
@@ -311,6 +314,8 @@ struct RollingNumber: View, Animatable {
     let size: CGFloat
     var tint: Color = ObserverStyle.accent
     var minimumDigits: Int = 12
+    var appearance: ObserverAppearance = .classic
+    var zeroTint: Color = ObserverStyle.zero
 
     nonisolated var animatableData: Double {
         get { value }
@@ -322,20 +327,20 @@ struct RollingNumber: View, Animatable {
             let numericText = String(Int64(max(0, value)))
             let activeDigits = max(1, numericText.count)
             let count = max(minimumDigits, activeDigits)
-            let widthInEm = CGFloat(count) * 0.52 + CGFloat((count - 1) / 3) * 0.28
+            let widthInEm = CGFloat(count) * appearance.digitWidth + CGFloat((count - 1) / 3) * appearance.groupSpacing
             let fittedSize = min(size, max(1, geometry.size.width) / widthInEm)
             let firstActiveIndex = max(0, count - activeDigits)
             HStack(spacing: 0) {
                 ForEach(0..<count, id: \.self) { index in
                     if index > 0 && (count - index).isMultiple(of: 3) {
-                        Spacer().frame(width: fittedSize * 0.28)
+                        Spacer().frame(width: fittedSize * appearance.groupSpacing)
                     }
                     OdometerDigit(
                         value: value,
                         place: pow(10.0, Double(count - 1 - index)),
                         size: fittedSize,
                         active: index >= firstActiveIndex,
-                        tint: tint
+                        tint: tint, appearance: appearance, zeroTint: zeroTint
                     )
                 }
             }
@@ -471,7 +476,9 @@ struct ObserverContent: View {
     var glow = false
     var quota: QuotaSnapshot?
     var showAllProjects = false
+    var appearance: ObserverAppearance = .classic
     var onToggleProjects: () -> Void = {}
+    var onSelectAppearance: (ObserverAppearance) -> Void = { _ in }
     @State private var projectsHovered = false
 
     private var warningTint: Color? { quota?.isOverLimit == true ? quota?.tint : nil }
@@ -479,6 +486,20 @@ struct ObserverContent: View {
     private var visibleProjects: [ProjectSnapshot] { showAllProjects ? projects : Array(projects.prefix(3)) }
 
     var body: some View {
+        Group {
+            if appearance == .mist {
+                MistObserverContent(today: today, total: total, projects: projects,
+                                    isConnected: isConnected, showPanelBackground: showPanelBackground,
+                                    quota: quota, showAllProjects: showAllProjects,
+                                    onToggleProjects: onToggleProjects, onSelectAppearance: onSelectAppearance)
+            } else {
+                classicContent
+            }
+        }
+        .environment(\.locale, Locale(identifier: "en"))
+    }
+
+    private var classicContent: some View {
         VStack(alignment: .trailing, spacing: 0) {
             HStack(spacing: 6) {
                 Text("CODEX")
@@ -491,6 +512,7 @@ struct ObserverContent: View {
                     .shadow(color: ObserverStyle.accent.opacity(glow ? 0.45 : 0.15), radius: glow ? 5 : 2)
                 Text(isConnected ? "LIVE" : "SYNC")
                     .foregroundStyle(ObserverStyle.secondary)
+                AppearanceMenu(appearance: .classic, tint: ObserverStyle.secondary, onSelect: onSelectAppearance)
             }
             .font(.custom("Avenir Next Condensed", size: 8).weight(.semibold))
             .tracking(1.1)
@@ -574,19 +596,23 @@ struct ObserverView: View {
     let onHide: () -> Void
     let onProjectsExpanded: (Bool) -> Void
     let onToggleFollowing: () -> Void
+    let onSelectAppearance: (ObserverAppearance) -> Void
 
     var body: some View {
         ObserverContent(today: model.today, total: model.total, projects: model.projects,
                         isConnected: model.isConnected, showPanelBackground: model.showPanelBackground,
-                        quota: model.quota, showAllProjects: model.showAllProjects,
+                        quota: model.quota, showAllProjects: model.showAllProjects, appearance: model.appearance,
                         onToggleProjects: {
                             model.showAllProjects.toggle()
                             onProjectsExpanded(model.showAllProjects)
-                        })
+                        }, onSelectAppearance: onSelectAppearance)
         .contentShape(Rectangle())
         .onAppear { model.start() }
         .contextMenu {
             Button("Hide Window", action: onHide)
+            Menu("Appearance") {
+                AppearanceOptions(appearance: model.appearance, onSelect: onSelectAppearance)
+            }
             Toggle("Follow Codex / ChatGPT", isOn: Binding(
                 get: { model.followsTargetApps },
                 set: { _ in onToggleFollowing() }
@@ -606,6 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var backgroundItems: [NSMenuItem] = []
     private var demoItems: [NSMenuItem] = []
     private var followItems: [NSMenuItem] = []
+    private var appearanceItems: [NSMenuItem] = []
     private var foregroundPolicy: ForegroundPolicy?
     private var targetAppIsForeground = false
     private var compactPanelSize = NSSize.zero
@@ -629,6 +656,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.resizeProjectList(expanded: expanded)
         }, onToggleFollowing: { [weak self] in
             self?.toggleForegroundFollowing()
+        }, onSelectAppearance: { [weak self] appearance in
+            self?.selectAppearance(appearance)
         }))
         panel.contentView = contentView
         compactPanelSize = contentView.fittingSize
@@ -655,6 +684,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
         let visibilityItem = addItem(to: menu, title: "Hide Window", action: #selector(togglePanelVisibility))
         visibilityItems.append(visibilityItem)
+        let appearanceMenu = NSMenu()
+        let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        appearanceItem.submenu = appearanceMenu
+        menu.addItem(appearanceItem)
+        for appearance in ObserverAppearance.allCases {
+            let item = addItem(to: appearanceMenu, title: appearance.title, action: #selector(selectAppearanceItem))
+            item.representedObject = appearance.rawValue
+            appearanceItems.append(item)
+        }
         menu.addItem(.separator())
         addItem(to: menu, title: "Move to Bottom Left", action: #selector(moveLeft))
         addItem(to: menu, title: "Move to Bottom Right", action: #selector(moveRight))
@@ -701,6 +739,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc private func moveLeft() { move(to: .left) }
     @objc private func moveRight() { move(to: .right) }
+    @objc private func selectAppearanceItem(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let appearance = ObserverAppearance(rawValue: raw) else { return }
+        selectAppearance(appearance)
+    }
+    private func selectAppearance(_ appearance: ObserverAppearance) {
+        guard model.appearance != appearance else { return }
+        model.appearance = appearance
+        appearance.save()
+        // Measure only the presentation. A style switch never restarts the
+        // collector or changes its published counters, expansion, or visibility.
+        let measurement = NSHostingView(rootView: ObserverContent(
+            today: model.today, total: model.total, projects: model.projects,
+            isConnected: model.isConnected, showPanelBackground: model.showPanelBackground,
+            quota: model.quota, appearance: appearance))
+        compactPanelSize = measurement.fittingSize
+        resizeProjectList(expanded: model.showAllProjects, animated: false)
+        updateMenuState()
+    }
     @objc private func toggleBackground(_ sender: NSMenuItem) {
         model.showPanelBackground.toggle()
         UserDefaults.standard.set(model.showPanelBackground, forKey: "showPanelBackground")
@@ -735,9 +791,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         backgroundItems.forEach { $0.state = model.showPanelBackground ? .on : .off }
         demoItems.forEach { $0.state = model.demoTotalEnabled ? .on : .off }
         followItems.forEach { $0.state = model.followsTargetApps ? .on : .off }
+        appearanceItems.forEach { $0.state = ($0.representedObject as? String) == model.appearance.rawValue ? .on : .off }
     }
 
-    private func resizeProjectList(expanded: Bool) {
+    private func resizeProjectList(expanded: Bool, animated: Bool = true) {
         guard let screen = panel.screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         let oldFrame = panel.frame
@@ -745,8 +802,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let height = min(visible.height - 6, compactPanelSize.height + extraHeight)
         let topAnchored = abs(oldFrame.maxY - visible.maxY) < 26
         let y = topAnchored ? visible.maxY - height - 3 : min(oldFrame.minY, visible.maxY - height - 3)
-        let target = NSRect(x: oldFrame.minX, y: max(visible.minY + 3, y), width: compactPanelSize.width, height: height)
+        let rightAnchored = abs(oldFrame.maxX - visible.maxX) < 26
+        let x = rightAnchored ? visible.maxX - compactPanelSize.width - 3 : oldFrame.minX
+        let target = NSRect(x: x, y: max(visible.minY + 3, y), width: compactPanelSize.width, height: height)
         resizingPanel = true
+        if !animated {
+            panel.setFrame(target, display: true)
+            resizingPanel = false
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.20
             panel.animator().setFrame(target, display: true)
