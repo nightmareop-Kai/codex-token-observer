@@ -5,7 +5,10 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Shapes;
 
@@ -112,7 +115,7 @@ public sealed class ObserverView : Border
         content.Children.Add(totalLine);
         content.Children.Add(new Border { Height = 1, Background = BrushFor(38, 51, 65) });
 
-        var projectHeader = new Grid();
+        var projectHeader = new Grid { Background = Brushes.Transparent, Height = 30 };
         projectHeader.ColumnDefinitions.Add(new ColumnDefinition());
         projectHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         _projectsLabel = Label("PROJECTS / TODAY", 8, Secondary);
@@ -137,13 +140,17 @@ public sealed class ObserverView : Border
         _projectsButton.MouseLeave += (_, _) => SetProjectHeaderBrush(Secondary);
         content.Children.Add(_projectsButton);
 
-        _projectList = new StackPanel();
+        _projectList = new StackPanel { HorizontalAlignment = HorizontalAlignment.Left };
         _projectScroll = new ScrollViewer
         {
             Content = _projectList, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, CanContentScroll = false,
             Padding = new Thickness(0), Focusable = false
         };
+        _projectScroll.Resources.Add(typeof(ScrollBar), CreateScrollBarStyle());
+        // Match the actual viewport, not the outer scroll viewer: its scrollbar
+        // owns a separate column and must never cover the final digit.
+        _projectList.SetBinding(WidthProperty, new Binding(nameof(ScrollViewer.ViewportWidth)) { Source = _projectScroll });
         _projectArea = new Grid { Height = CompactListHeight };
         _projectArea.Children.Add(_projectScroll);
         _emptyState = Label("Reading local activity…", 10, Secondary);
@@ -175,7 +182,7 @@ public sealed class ObserverView : Border
     public void SetBackground(bool enabled)
     {
         Background = enabled ? new SolidColorBrush(Color.FromArgb(232, 7, 12, 18)) : Brushes.Transparent;
-        BorderBrush = enabled ? new SolidColorBrush(Color.FromArgb(48, 199, 214, 230)) : Brushes.Transparent;
+        BorderBrush = enabled ? BrushFor(34, 47, 59) : Brushes.Transparent;
     }
 
     public void SetConnected(bool connected)
@@ -294,6 +301,45 @@ public sealed class ObserverView : Border
         Foreground = color, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.NoWrap
     };
 
+    private static Style CreateScrollBarStyle() => (Style)XamlReader.Parse("""
+        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+               TargetType="{x:Type ScrollBar}">
+          <Setter Property="Width" Value="6"/>
+          <Setter Property="MinWidth" Value="6"/>
+          <Setter Property="Focusable" Value="False"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="{x:Type ScrollBar}">
+                <Border Background="#14222E" CornerRadius="3">
+                  <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True"
+                         Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                         Value="{TemplateBinding Value}" ViewportSize="{TemplateBinding ViewportSize}">
+                    <Track.DecreaseRepeatButton>
+                      <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}" Opacity="0"
+                                    Focusable="False" IsTabStop="False"/>
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                      <Thumb Focusable="False">
+                        <Thumb.Template>
+                          <ControlTemplate TargetType="{x:Type Thumb}">
+                            <Border Background="#526679" CornerRadius="3"/>
+                          </ControlTemplate>
+                        </Thumb.Template>
+                      </Thumb>
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                      <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}" Opacity="0"
+                                    Focusable="False" IsTabStop="False"/>
+                    </Track.IncreaseRepeatButton>
+                  </Track>
+                </Border>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+        """);
+
     private static Brush BrushFor(byte red, byte green, byte blue)
     {
         var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
@@ -323,7 +369,7 @@ public sealed class ObserverView : Border
 
         public ProjectRow()
         {
-            Margin = new Thickness(0, 0, 0, 6);
+            Margin = new Thickness(0, 0, 4, 6);
             ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
             ColumnDefinitions.Add(new ColumnDefinition());
             ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });

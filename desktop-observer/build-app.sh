@@ -23,6 +23,9 @@ STAGED_APP="$STAGING_DIR/Codex Token Observer.app"
 CONTENTS="$STAGED_APP/Contents"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/counter"
 cp -X "$EXECUTABLE" "$CONTENTS/MacOS/CodexTokenObserver"
+# Swift's prefix map does not rewrite the linker's OSO debug-map entries, which
+# can retain absolute object-file paths. Remove debug symbols before signing.
+strip -S "$CONTENTS/MacOS/CodexTokenObserver"
 cp -X "$SCRIPT_DIR/Info.plist" "$CONTENTS/Info.plist"
 cp -X "$PROJECT_ROOT/LICENSE" "$CONTENTS/Resources/LICENSE"
 cp -X "$PROJECT_ROOT/PRIVACY.md" "$CONTENTS/Resources/PRIVACY.md"

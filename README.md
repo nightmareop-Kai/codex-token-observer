@@ -2,7 +2,9 @@
 
 本地优先的 macOS / Windows Codex Token 桌面观察器，显示 `TODAY`、`TOTAL` 和今日消耗最多的三个项目，使用机械里程表式数字动画。项目显示名优先匹配 Codex 侧栏名称，不再只取磁盘文件夹名。界面、菜单、提示和可访问标签统一使用英文，项目名称保留原文（包括中文），不翻译。
 
-![Codex Token Observer](docs/hardware-panel-visual-baseline.png)
+Mac 与 Windows 的界面示例（使用模拟数据，不含个人使用记录）：
+
+<img src="docs/screenshots/macos-0.2.0.png" alt="Mac preview" width="300"> <img src="docs/screenshots/windows-0.2.0.png" alt="Windows preview" width="300">
 
 ## 系统要求
 
@@ -86,7 +88,7 @@ swift build
 
 ## 给朋友安装
 
-从 [GitHub Releases](https://github.com/nightmareop-Kai/codex-token-observer/releases) 下载对应平台的 ZIP，不要选自动生成的 Source code。
+从 [v0.2.0 双平台预览版下载页](https://github.com/nightmareop-Kai/codex-token-observer/releases/tag/v0.2.0) 下载对应平台的 ZIP，不要选自动生成的 Source code。Windows 首版先以 Preview 发布，欢迎同事试用反馈。
 
 - Mac：解压，将 `.app` 拖入“应用程序”后打开。升级前退出旧版再替换应用。
 - Windows：完整解压，保留全部文件，双击 `CodexTokenObserver.exe`。不要仅复制 exe 或在 ZIP 中直接打开。升级前退出旧版，使用新解压的文件夹。

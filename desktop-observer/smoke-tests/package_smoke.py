@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise release packaging in isolated fixtures, never the real dist/release.
 
-Swift, lipo, and codesign are test doubles; macOS ditto, PlistBuddy, and shasum
+Swift, lipo, strip, and codesign are test doubles; macOS ditto, PlistBuddy, and shasum
 run normally. This tests packaging policy, not compilation or code signing.
 """
 
@@ -31,12 +31,19 @@ if command == "swift":
         print(binary_dir)
     else:
         binary_dir.mkdir(parents=True, exist_ok=True)
-        (binary_dir / "CodexTokenObserver").write_bytes(b"FAKE ARM64 EXECUTABLE")
+        (binary_dir / "CodexTokenObserver").write_bytes(
+            b"FAKE ARM64 EXECUTABLE|PRIVATE_DEBUG_PATH|" + os.fsencode(Path.cwd()))
 elif command == "lipo":
     print(os.environ.get("OBSERVER_TEST_ARCH", "arm64"))
+elif command == "strip":
+    assert sys.argv[1] == "-S"
+    executable = Path(sys.argv[2])
+    executable.write_bytes(executable.read_bytes().split(b"|PRIVATE_DEBUG_PATH|")[0])
 elif command == "codesign":
     if os.environ.get("OBSERVER_TEST_SIGN_FAIL"):
         sys.exit(1)
+    executable = Path(sys.argv[-1]) / "Contents" / "MacOS" / "CodexTokenObserver"
+    assert b"|PRIVATE_DEBUG_PATH|" not in executable.read_bytes(), "Strip must precede signing"
 else:
     sys.exit(2)
 """
@@ -72,7 +79,7 @@ class PackageSmoke(unittest.TestCase):
         (self.root / "src" / "unrelated.py").write_text("# Not this package\n")
         stubs = self.root / "stubs"
         stubs.mkdir()
-        for name in ("swift", "lipo", "codesign"):
+        for name in ("swift", "lipo", "strip", "codesign"):
             path = stubs / name
             path.write_text(STUB)
             path.chmod(0o755)
@@ -114,6 +121,9 @@ class PackageSmoke(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         with zipfile.ZipFile(self.release / self.zip_name) as archive:
+            executable = archive.read("Codex Token Observer.app/Contents/MacOS/CodexTokenObserver")
+            self.assertNotIn(b"|PRIVATE_DEBUG_PATH|", executable)
+            self.assertNotIn(os.fsencode(self.root), executable)
             for name in archive.namelist():
                 self.assertNotIn("__pycache__", name)
                 self.assertFalse(name.endswith((".pyc", ".sqlite3", ".json", ".env", ".log")), name)

@@ -61,7 +61,13 @@ public static class SmokeTest
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Render(view, output, "expanded");
         Require(view.Expanded, "Expand works");
-        Require(Elements<RollingNumber>(view).Count(number => number.IsVisible || number.Visibility == Visibility.Visible) >= 17, "Expanded projects include totals");
+        Require(Elements<RollingNumber>(view).Count(number => number.IsVisible || number.Visibility == Visibility.Visible) == 17, "Expanded projects include totals without extra Today fields");
+        var projectScroll = Elements<ScrollViewer>(view).Single();
+        var viewport = Elements<ScrollContentPresenter>(projectScroll).Single();
+        var viewportRight = viewport.TransformToAncestor(view).TransformBounds(new Rect(viewport.RenderSize)).Right;
+        Require(Elements<RollingNumber>((DependencyObject)projectScroll.Content).All(number =>
+            number.TransformToAncestor(view).TransformBounds(new Rect(number.RenderSize)).Right <= viewportRight - 1),
+            "Every project counter ends inside the viewport with space before its scrollbar");
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Require(!view.Expanded, "Collapse works");
         fixture.Quota!.CurrentPercent = 27; fixture.Quota.CumulativePercent = 127; fixture.Quota.Estimated = true;
@@ -84,7 +90,19 @@ public static class SmokeTest
             host.Show();
             await host.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
             host.ViewForTests.Apply(fixture, false);
-            Elements<Button>(host.ViewForTests).Single().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await host.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
+            var liveButton = Elements<Button>(host.ViewForTests).Single();
+            Require(HitBelongsToButton(liveButton, new Point(liveButton.ActualWidth / 2, 2))
+                && HitBelongsToButton(liveButton, new Point(liveButton.ActualWidth / 2, liveButton.ActualHeight - 2)),
+                "Project header blank area belongs to its button, not window dragging");
+            liveButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await host.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
+            var liveScroll = Elements<ScrollViewer>(host.ViewForTests).Single();
+            liveScroll.ScrollToEnd();
+            await host.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
+            Require(liveScroll.VerticalOffset > 0 && Math.Abs(liveScroll.VerticalOffset - liveScroll.ScrollableHeight) <= 1,
+                "Expanded project list scrolls to its final item");
+            liveScroll.ScrollToTop();
             await host.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
             Require(host.Top + host.ActualHeight <= host.WorkingAreaForTests.Bottom + 1, "Expanded native window remains on screen");
             host.SetForegroundForTests(true); Require(host.Topmost, "Target app floats observer");
@@ -112,7 +130,7 @@ public static class SmokeTest
             Require(init.ExitCode == 0, "Bundled Python starts and initializes isolated database");
         }
         var timestamp = DateTimeOffset.UtcNow.AddSeconds(1).ToString("O");
-        var meta = JsonSerializer.Serialize(new { type = "session_meta", payload = new { cwd = "C:/fixture/test-project" } });
+        var meta = JsonSerializer.Serialize(new { type = "session_meta", payload = new { cwd = "C:/fixture/中文项目示例" } });
         var entry = JsonSerializer.Serialize(new
         {
             timestamp, type = "event_msg", payload = new
@@ -132,8 +150,21 @@ public static class SmokeTest
         }
         var first = await Sample(); var second = await Sample();
         Require(first.Today == 315 && first.Total == 315 && first.Projects.Count == 1, "End-to-end bundled collector snapshot");
+        Require(first.Projects[0].Name == "中文项目示例", "End-to-end collector preserves Unicode project names");
         Require(second.Total == 315, "Restart persists count without double counting");
         // The test database remains in the CI smoke artifact, never in the release ZIP.
+    }
+
+    private static bool HitBelongsToButton(Button button, Point point)
+    {
+        var hit = button.InputHitTest(point) as DependencyObject;
+        while (hit != null)
+        {
+            if (ReferenceEquals(hit, button)) return true;
+            hit = hit is Visual || hit is System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(hit) : LogicalTreeHelper.GetParent(hit);
+        }
+        return false;
     }
 
     private static IEnumerable<T> Elements<T>(DependencyObject parent) where T : DependencyObject
