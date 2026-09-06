@@ -49,6 +49,8 @@ class PackageSmoke(unittest.TestCase):
         self.root = Path(self.temporary.name) / "Project With Spaces"
         self.scripts = self.root / "desktop-observer"
         self.scripts.mkdir(parents=True)
+        (self.root / "LICENSE").write_text("Fixture MIT license\n")
+        (self.root / "PRIVACY.md").write_text("Fixture privacy policy\n")
         for name in ("build-app.sh", "package-release.sh"):
             shutil.copy2(SCRIPT_DIR / name, self.scripts / name)
         with (self.scripts / "Info.plist").open("wb") as handle:
@@ -92,6 +94,9 @@ class PackageSmoke(unittest.TestCase):
 
     def test_default_version_clean_sources_and_portable_checksum(self):
         self.run_script("package-release.sh")
+        resources = self.app / "Contents" / "Resources"
+        self.assertEqual((resources / "LICENSE").read_text(), "Fixture MIT license\n")
+        self.assertEqual((resources / "PRIVACY.md").read_text(), "Fixture privacy policy\n")
         source = self.app / "Contents" / "Resources" / "counter" / "src"
         bundled_files = {
             str(path.relative_to(source)) for path in source.rglob("*") if path.is_file()

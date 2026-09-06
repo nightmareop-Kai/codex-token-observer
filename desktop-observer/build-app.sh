@@ -24,6 +24,8 @@ CONTENTS="$STAGED_APP/Contents"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/counter"
 cp -X "$EXECUTABLE" "$CONTENTS/MacOS/CodexTokenObserver"
 cp -X "$SCRIPT_DIR/Info.plist" "$CONTENTS/Info.plist"
+cp -X "$PROJECT_ROOT/LICENSE" "$CONTENTS/Resources/LICENSE"
+cp -X "$PROJECT_ROOT/PRIVACY.md" "$CONTENTS/Resources/PRIVACY.md"
 
 # The counter is a pure-Python package. Deliberately copy only source files, not
 # __pycache__, .pyc files, logs, local databases, credentials, or other siblings.
