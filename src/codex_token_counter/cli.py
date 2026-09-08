@@ -247,6 +247,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # Native desktop clients read a UTF-8 JSON protocol. Redirected Windows
+    # streams otherwise inherit the locale code page, which cannot encode many
+    # valid permanent nicknames. Establish the wire encoding at every CLI entry.
+    # Embedded callers/tests may supply StringIO; leave their streams intact.
+    for output, errors in ((sys.stdout, "strict"), (sys.stderr, "backslashreplace")):
+        reconfigure = getattr(output, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors=errors)
     args = build_parser().parse_args()
     if args.command == "init":
         return initialize(args)

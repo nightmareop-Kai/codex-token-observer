@@ -433,11 +433,54 @@ class LeaderboardTests(unittest.TestCase):
         env = dict(os.environ)
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
         result = subprocess.run([sys.executable, "-m", "codex_token_counter.cli", "--db", str(self.db),
-                                 "profile-status"], capture_output=True, text=True, env=env, timeout=3)
+                                 "profile-status"], capture_output=True, text=True, encoding="utf-8", env=env, timeout=3)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stdout)["profile"]["status"], "active")
+        self.assertEqual(json.loads(result.stdout)["profile"]["nickname"], "小庄 Zuno")
         self.assertNotIn(state["credential"], result.stdout + result.stderr)
         self.assertIsNone(self.store.get_metadata("installed_at"))
+
+    def test_cli_profile_and_board_use_utf8_despite_legacy_pipe_encoding(self):
+        self.join()
+        state = ProfileStore(self.db).read()
+        row_name = "科技猫 München"
+        public_entry = {"id": str(uuid.uuid4()), "rank": 1, "nickname": row_name, "total_tokens": 123}
+        def handler(request):
+            board = {"date": "2026-09-07", "time_zone": "Asia/Shanghai", "entries": [public_entry],
+                     "total_participants": 1, "own_entry": None, "updated_at": "2026-09-08T00:00:00Z"}
+            payload = json.dumps(board, ensure_ascii=False).encode("utf-8")
+            request.send_response(200)
+            request.send_header("Content-Length", str(len(payload)))
+            request.end_headers()
+            request.wfile.write(payload)
+        with http_service(handler) as url:
+            for encoding in ("ascii", "cp1252"):
+                for command, expected_name in (("profile-status", "小庄 Zuno"), ("leaderboard-read", row_name)):
+                    with self.subTest(encoding=encoding, command=command):
+                        env = dict(os.environ, PYTHONIOENCODING=encoding)
+                        env[URL_OVERRIDE] = url
+                        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+                        result = subprocess.run([sys.executable, "-m", "codex_token_counter.cli", "--db", str(self.db), command],
+                                                capture_output=True, env=env, timeout=3)
+                        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8"))
+                        # Assert actual UTF-8 wire bytes, not a permissive decoder or
+                        # merely successful JSON parsing of an escaped ASCII value.
+                        self.assertIn(expected_name.encode("utf-8"), result.stdout)
+                        payload = json.loads(result.stdout.decode("utf-8"))
+                        observed = payload["profile"]["nickname"] if command == "profile-status" else payload["entries"][0]["nickname"]
+                        self.assertEqual(observed, expected_name)
+                        self.assertNotIn(state["credential"].encode("ascii"), result.stdout + result.stderr)
+
+    def test_cli_main_preserves_embedded_stringio_streams(self):
+        from codex_token_counter import cli
+
+        self.join()
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(sys, "argv", ["zuno", "--db", str(self.db), "profile-status"]), \
+                patch.object(sys, "stdout", output), patch.object(sys, "stderr", errors):
+            self.assertEqual(cli.main(), 0)
+        self.assertEqual(json.loads(output.getvalue())["profile"]["nickname"], "小庄 Zuno")
+        self.assertEqual(errors.getvalue(), "")
 
     def test_stream_counter_emits_without_waiting_for_network(self):
         blocked = threading.Event()
