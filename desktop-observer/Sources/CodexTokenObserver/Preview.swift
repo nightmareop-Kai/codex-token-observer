@@ -35,6 +35,10 @@ enum ObserverPreview {
             try render(name: "stale", directory: directory, projects: projects, background: true, quotaPercent: 75, stale: true)
             try render(name: "over-limit", directory: directory, projects: projects, background: true, quotaPercent: 127)
             try render(name: "quota-unavailable", directory: directory, projects: projects, background: true, quotaPercent: nil)
+            try render(name: "quota-full", directory: directory, projects: projects, background: true, quotaPercent: 0)
+            try render(name: "quota-exhausted", directory: directory, projects: projects, background: true, quotaPercent: 100)
+            try render(name: "quota-after-reset", directory: directory, projects: projects, background: true,
+                       quotaPercent: 7, cumulativePercent: 197)
             let extraProjects = (4...12).map { index in
                 ProjectSnapshot(name: "示例项目 \(index)", path: "/preview/project-\(index)", total: Double(10_000_000 / index), today: Double(12_000 / index))
             }
@@ -51,6 +55,18 @@ enum ObserverPreview {
                 let prefix = scheme == .light ? "mist-light" : "mist-dark"
                 try render(name: prefix, directory: directory, projects: projects,
                            background: true, appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-quota-full", directory: directory, projects: projects,
+                           background: true, quotaPercent: 0, appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-quota-exhausted", directory: directory, projects: projects,
+                           background: true, quotaPercent: 100, appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-quota-after-reset", directory: directory, projects: projects,
+                           background: true, quotaPercent: 7, cumulativePercent: 197,
+                           appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-quota-stale", directory: directory, projects: projects,
+                           background: true, quotaPercent: 7, stale: true,
+                           appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-quota-unavailable", directory: directory, projects: projects,
+                           background: true, quotaPercent: nil, appearance: .mist, colorScheme: scheme)
                 try render(name: "\(prefix)-expanded", directory: directory,
                            projects: projects + extraProjects, background: true, expanded: true,
                            appearance: .mist, colorScheme: scheme)
@@ -64,7 +80,47 @@ enum ObserverPreview {
                            today: 1_234_567_890_123, total: 123_456_789_012_345)
                 try render(name: "\(prefix)-transparent", directory: directory, projects: projects,
                            background: false, appearance: .mist, colorScheme: scheme)
+                try render(name: "\(prefix)-leaderboard", directory: directory, projects: projects,
+                           background: true, appearance: .mist, colorScheme: scheme, page: .leaderboard)
+                try render(name: "\(prefix)-leaderboard-expanded", directory: directory,
+                           projects: projects + extraProjects, background: true, expanded: true,
+                           appearance: .mist, colorScheme: scheme, page: .leaderboard)
+                try render(name: "\(prefix)-leaderboard-transparent", directory: directory, projects: projects,
+                           background: false, appearance: .mist, colorScheme: scheme, page: .leaderboard)
+                for status in ["loading", "ok", "offline", "not_configured"] {
+                    try render(name: "\(prefix)-leaderboard-\(status)", directory: directory, projects: projects,
+                               background: true, appearance: .mist, colorScheme: scheme, page: .leaderboard,
+                               board: LeaderboardSnapshot(status: status))
+                }
+                try render(name: "\(prefix)-leaderboard-stale", directory: directory, projects: projects,
+                           background: true, appearance: .mist, colorScheme: scheme, page: .leaderboard,
+                           board: LeaderboardSnapshot.sample().asOffline())
+                let sample = LeaderboardSnapshot.sample()
+                try render(name: "\(prefix)-leaderboard-upload-pending", directory: directory, projects: projects,
+                           background: true, appearance: .mist, colorScheme: scheme, page: .leaderboard,
+                           board: LeaderboardSnapshot(status: "ok", date: sample.date, entries: sample.entries,
+                                                      totalParticipants: sample.totalParticipants, ownEntry: sample.ownEntry,
+                                                      error: "sync_failed", ownEntryStale: true, isSample: true))
+                try render(name: "\(prefix)-leaderboard-sharing-paused", directory: directory, projects: projects,
+                           background: true, appearance: .mist, colorScheme: scheme, page: .leaderboard,
+                           profileState: "paused")
+                for status in ["needs_name", "active", "paused", "pending", "upload-pending"] {
+                    let profile = ZunoProfile(status: status == "upload-pending" ? "active" : status,
+                                              id: status == "needs_name" ? nil : "00000000-0000-4000-8000-000000000086",
+                                              nickname: status == "needs_name" ? nil : "小庄",
+                                              error: status == "pending" ? "offline" : status == "upload-pending" ? "sync_failed" : nil)
+                    let view = ProfileContent(profile: profile, busy: false, requestError: nil,
+                                              onRegister: { _ in }, onToggleSync: {}, onClose: {})
+                        .environment(\.colorScheme, scheme)
+                    try capture(view, name: "\(prefix)-profile-\(status)", directory: directory, colorScheme: scheme)
+                }
             }
+            try render(name: "classic-leaderboard", directory: directory, projects: projects,
+                       background: true, page: .leaderboard)
+            try render(name: "classic-leaderboard-expanded", directory: directory, projects: projects,
+                       background: true, expanded: true, page: .leaderboard)
+            try render(name: "classic-leaderboard-transparent", directory: directory, projects: projects,
+                       background: false, page: .leaderboard)
         } catch {
             print("Preview failed: \(error)")
         }
@@ -72,27 +128,35 @@ enum ObserverPreview {
     }
 
     private static func render(name: String, directory: URL, projects: [ProjectSnapshot], background: Bool,
-                               quotaPercent: Double? = 46, expanded: Bool = false,
+                               quotaPercent: Double? = 46, cumulativePercent: Double? = nil, expanded: Bool = false,
                                connected: Bool = true, stale: Bool = false,
                                appearance: ObserverAppearance = .classic, colorScheme: ColorScheme = .dark,
-                               today: Double? = nil, total: Double? = nil) throws {
+                               today: Double? = nil, total: Double? = nil,
+                               page: ObserverPage = .counter, board: LeaderboardSnapshot? = nil,
+                               profileState: String = "active") throws {
         let quota = quotaPercent.map { percent in
-            QuotaSnapshot(available: true, currentPercent: percent.truncatingRemainder(dividingBy: 100),
-                          cumulativePercent: percent, resetsAt: Date().timeIntervalSince1970 + 86400,
-                          observedAt: nil, resetCount: percent > 100 ? 1 : 0,
-                          stale: stale, estimated: percent > 100)
+            QuotaSnapshot(available: true, currentPercent: percent,
+                          cumulativePercent: cumulativePercent ?? percent, resetsAt: Date().timeIntervalSince1970 + 86400,
+                          observedAt: nil, resetCount: cumulativePercent != nil ? 1 : 0,
+                          stale: stale, estimated: cumulativePercent != nil)
         }
         let content = ObserverContent(
             today: today ?? (projects.isEmpty ? 0 : 8_403_527),
             total: total ?? (projects.isEmpty ? 0 : 6_172_098_410),
             projects: projects.sorted { $0.today == $1.today ? $0.total > $1.total : $0.today > $1.today },
             isConnected: connected, showPanelBackground: background,
-            quota: quota, showAllProjects: expanded, appearance: appearance
+            quota: quota, showAllProjects: expanded, appearance: appearance, page: page,
+            leaderboardSnapshot: board ?? .sample(),
+            profile: ZunoProfile(status: profileState, id: "demo-you", nickname: "小庄", error: nil)
         )
         .environment(\.colorScheme, colorScheme)
         .background(colorScheme == .light
                     ? Color(red: 0.88, green: 0.90, blue: 0.93)
                     : Color(red: 0.065, green: 0.085, blue: 0.11))
+        try capture(content, name: name, directory: directory, colorScheme: colorScheme)
+    }
+
+    private static func capture<V: View>(_ content: V, name: String, directory: URL, colorScheme: ColorScheme) throws {
         // ImageRenderer omits AppKit-backed ScrollView content on macOS. Mount
         // the real view in an offscreen panel and cache its display instead.
         let host = NSHostingView(rootView: content)

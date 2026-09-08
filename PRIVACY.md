@@ -1,16 +1,21 @@
 # Privacy
 
-Codex Token Observer is local-first.
+Zuno (formerly Codex Token Observer) is local-first.
 
 - It reads token usage events from `~/.codex/sessions/**/*.jsonl`.
 - It stores counters in `~/Library/Application Support/Codex Token Observer/token_counter.sqlite3`.
 - On Windows, counters and preferences live under `%LOCALAPPDATA%\Codex Token Observer`. It reads the current user's `.codex/sessions`, or an existing `CODEX_HOME` override. It does not automatically inspect WSL or remote machines. The bundled Python and .NET runtimes do not require administrator privileges.
 - To match sidebar project names, it reads only project names and root paths from Codex's local `state_5.sqlite` project tables, falling back to project label fields in `.codex-global-state.json` when unavailable. It never modifies those files. These labels are used for display, not to rewrite token history.
-- It does not upload local session contents or local token counters.
+- It never uploads local session contents, project names or paths, computer names, hardware identifiers, Codex account identities or OpenAI credentials.
+- On first launch, Create & Join asks for a permanent nickname and explains that the nickname, random installation ID, date and daily Token activity will be public. There is no automatic registration or usage upload before this button is pressed. Once registered, sharing is automatic while the app is running and online. Closing the naming window keeps the local counter available; Pause leaderboard sync stops further uploads without renaming the profile.
+- The leaderboard service is hosted at `https://zuno-leaderboard.nightmareop.chatgpt.site`. Public leaderboard reads may occur before registration. Sharing sends only actual usage occurring after the join timestamp, grouped by UTC+08 days, with up to seven days of offline catch-up. Simulated events and visual baselines are excluded. The public yesterday board may change as late reports arrive; it is device-reported, not verified by OpenAI.
+- A random installation UUID and independent 256-bit authentication credential are saved beside the ledger in a `.zuno-profile.json` sidecar (0600 permissions on Mac, user AppData permissions on Windows). Credentials are never included in public snapshots. The server stores only a hash of this credential; each device can update only its own activity. This identity is installation-scoped, not an authenticated person or recoverable cross-device account.
+- The service keeps usage for the most recent 30 calendar days; older usage is removed during subsequent sync activity. Profiles persist until deleted. Its authenticated DELETE /api/v1/me endpoint removes public profile/daily rows and retires the installation credential. A minimal retired-identity record prevents using deletion to rename the same ID. Pausing or uninstalling alone does not remove already shared records. No rename endpoint is provided.
+- Hosting infrastructure processes normal connection metadata. The app does not deliberately upload IP addresses; server-side abuse controls may derive daily hashes of the network address rather than storing it in public records. Throttle records older than 48 hours are purged during subsequent registration activity. Hosting-provider operational/security logging is separate.
 - It does not require an OpenAI API key.
 - For the weekly quota indicator, the bundled Codex CLI contacts OpenAI using its existing signed-in account. The observer calls only `account/read` and `account/rateLimits/read`, after initialization. It does not start AI tasks, sign in or out, or redeem reset credits.
 - It stores observed quota percentages and reset history in the local database, keyed by a hash of the account identity. It does not persist account email addresses or authentication credentials.
-- It displays the service-reported weekly quota percentage and an estimated accumulated percentage across observed resets. It does not convert tokens to a billing amount or assume a fixed token allowance.
+- It displays weekly remaining allowance as 100 minus the service-reported current weekly usage percentage, clamped to 0–100%. Previous reset history is retained locally for compatibility but is not added to the displayed balance. Account resets do not erase the Today or Total token counters. It does not convert tokens to a billing amount or assume a fixed token allowance.
 
 For local token counting, the application parses `token_count` events and reads the working directory in `session_meta` to group projects. It stores project names and paths locally. It does not display or persist prompt or response text.
 

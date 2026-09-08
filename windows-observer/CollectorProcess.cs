@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
@@ -35,21 +36,48 @@ public sealed class CollectorProcess : IDisposable
         return start;
     }
 
-    public void Start(string database, string sessions, bool readQuota = true)
+    public void Start(string database, string sessions, bool readQuota = true, bool readLeaderboard = true)
     {
         if (process != null) return;
         try
         {
-            var arguments = readQuota
-                ? new[] { "stream", "--interval", "300", "--account-quota" }
-                : new[] { "stream", "--interval", "300" };
-            process = Process.Start(Command(database, sessions, arguments))
+            var arguments = new List<string> { "stream", "--interval", "300" };
+            if (readQuota) arguments.Add("--account-quota");
+            if (readLeaderboard) arguments.Add("--leaderboard");
+            process = Process.Start(Command(database, sessions, arguments.ToArray()))
                 ?? throw new IOException("Collector did not start.");
             _ = ReadAsync(process, cancellation.Token);
         }
         catch (Exception exception) when (exception is IOException || exception is System.ComponentModel.Win32Exception)
         {
             Unavailable?.Invoke("Unable to start the collector. Extract the full download and try again.");
+        }
+    }
+
+    /// <summary>Bounded one-shot calls use the same bundled runtime and ledger as collection.</summary>
+    public static async Task<T> RequestAsync<T>(string database, string sessions, CancellationToken token,
+        params string[] command) where T : class
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(25));
+        using var child = Process.Start(Command(database, sessions, command))
+            ?? throw new IOException("Unable to start Zuno's local service.");
+        try
+        {
+            // Do not display stderr, command lines, credentials or raw responses in the UI.
+            var errors = child.StandardError.ReadToEndAsync(timeout.Token);
+            var output = child.StandardOutput.ReadToEndAsync(timeout.Token);
+            await child.WaitForExitAsync(timeout.Token);
+            var text = await output;
+            await errors;
+            if (text.Length > 4 * 1024 * 1024) throw new IOException("Invalid service response.");
+            return JsonSerializer.Deserialize<T>(text) ?? throw new IOException("Invalid service response.");
+        }
+        finally
+        {
+            try { if (!child.HasExited) child.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
         }
     }
 

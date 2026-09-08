@@ -61,7 +61,23 @@ class PackageSmoke(unittest.TestCase):
         for name in ("build-app.sh", "package-release.sh"):
             shutil.copy2(SCRIPT_DIR / name, self.scripts / name)
         with (self.scripts / "Info.plist").open("wb") as handle:
-            plistlib.dump({"CFBundleShortVersionString": "9.8.7"}, handle)
+            plistlib.dump({
+                "CFBundleName": "Zuno",
+                "CFBundleDisplayName": "Zuno",
+                "CFBundleExecutable": "CodexTokenObserver",
+                "CFBundleIdentifier": "design.codex.token-observer",
+                "CFBundleShortVersionString": "9.8.7",
+                "CFBundleIconFile": "AppIcon",
+                "LSUIElement": False,
+            }, handle)
+        self.resources = self.scripts / "Resources"
+        self.resources.mkdir()
+        # Minimal synthetic ICNS header: byte-for-byte packaging is under test,
+        # not icon rendering (nor the real app's resources).
+        self.icon_bytes = b"icns\x00\x00\x00\x08"
+        self.icon = self.resources / "AppIcon.icns"
+        self.icon.write_bytes(self.icon_bytes)
+        (self.resources / "not-for-release.txt").write_text("private design notes\n")
         self.package = self.root / "src" / "codex_token_counter"
         (self.package / "__pycache__").mkdir(parents=True)
         (self.package / "nested").mkdir()
@@ -84,9 +100,9 @@ class PackageSmoke(unittest.TestCase):
             path.write_text(STUB)
             path.chmod(0o755)
         self.env = dict(os.environ, PATH=str(stubs) + os.pathsep + os.environ["PATH"])
-        self.app = self.root / "dist" / "Codex Token Observer.app"
+        self.app = self.root / "dist" / "Zuno.app"
         self.release = self.root / "release"
-        self.zip_name = "Codex Token Observer-9.8.7-macos-arm64.zip"
+        self.zip_name = "Zuno-9.8.7-macos-arm64.zip"
 
     def run_script(self, name, *arguments, success=True):
         result = subprocess.run(
@@ -104,6 +120,16 @@ class PackageSmoke(unittest.TestCase):
         resources = self.app / "Contents" / "Resources"
         self.assertEqual((resources / "LICENSE").read_text(), "Fixture MIT license\n")
         self.assertEqual((resources / "PRIVACY.md").read_text(), "Fixture privacy policy\n")
+        self.assertEqual((resources / "AppIcon.icns").read_bytes(), self.icon_bytes)
+        self.assertFalse((resources / "not-for-release.txt").exists())
+        with (self.app / "Contents" / "Info.plist").open("rb") as handle:
+            bundled_info = plistlib.load(handle)
+        self.assertEqual(bundled_info["CFBundleIconFile"], "AppIcon")
+        self.assertIs(bundled_info["LSUIElement"], False)
+        self.assertEqual(bundled_info["CFBundleName"], "Zuno")
+        self.assertEqual(bundled_info["CFBundleDisplayName"], "Zuno")
+        self.assertEqual(bundled_info["CFBundleExecutable"], "CodexTokenObserver")
+        self.assertEqual(bundled_info["CFBundleIdentifier"], "design.codex.token-observer")
         source = self.app / "Contents" / "Resources" / "counter" / "src"
         bundled_files = {
             str(path.relative_to(source)) for path in source.rglob("*") if path.is_file()
@@ -121,7 +147,11 @@ class PackageSmoke(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         with zipfile.ZipFile(self.release / self.zip_name) as archive:
-            executable = archive.read("Codex Token Observer.app/Contents/MacOS/CodexTokenObserver")
+            self.assertEqual(
+                archive.read("Zuno.app/Contents/Resources/AppIcon.icns"),
+                self.icon_bytes,
+            )
+            executable = archive.read("Zuno.app/Contents/MacOS/CodexTokenObserver")
             self.assertNotIn(b"|PRIVATE_DEBUG_PATH|", executable)
             self.assertNotIn(os.fsencode(self.root), executable)
             for name in archive.namelist():
@@ -166,6 +196,43 @@ class PackageSmoke(unittest.TestCase):
         self.assertEqual(marker.read_text(), "keep")
         self.assertEqual(list(self.release.iterdir()), [])
         self.assertEqual(list(self.app.parent.iterdir()), [self.app])
+
+    def test_missing_icon_preserves_app_and_cleans_staging(self):
+        self.app.mkdir(parents=True)
+        marker = self.app / "existing-app"
+        marker.write_text("keep")
+        self.icon.unlink()
+        result = self.run_script("package-release.sh", success=False)
+        self.assertIn("AppIcon.icns", result.stderr)
+        self.assertEqual(marker.read_text(), "keep")
+        self.assertEqual(list(self.release.iterdir()), [])
+        self.assertEqual(list(self.app.parent.iterdir()), [self.app])
+
+    def test_source_metadata_exposes_dock_app_with_icon(self):
+        with (SCRIPT_DIR / "Info.plist").open("rb") as handle:
+            info = plistlib.load(handle)
+        self.assertIs(info.get("LSUIElement", False), False)
+        self.assertEqual(info.get("CFBundleIconFile"), "AppIcon")
+        self.assertEqual(info.get("CFBundleName"), "Zuno")
+        self.assertEqual(info.get("CFBundleDisplayName"), "Zuno")
+        self.assertEqual(info.get("CFBundleExecutable"), "CodexTokenObserver")
+        self.assertEqual(info.get("CFBundleIdentifier"), "design.codex.token-observer")
+
+    def test_rebrand_preserves_old_app_and_replaces_only_zuno_bundle(self):
+        old_app = self.app.parent / "Codex Token Observer.app"
+        old_app.mkdir(parents=True)
+        old_marker = old_app / "existing-app"
+        old_marker.write_bytes(b"old app remains available")
+        self.app.mkdir()
+        obsolete_resource = self.app / "obsolete-private-resource"
+        obsolete_resource.write_bytes(b"must not survive the clean build")
+
+        self.run_script("build-app.sh")
+
+        self.assertEqual(old_marker.read_bytes(), b"old app remains available")
+        self.assertFalse(obsolete_resource.exists())
+        self.assertTrue((self.app / "Contents" / "MacOS" / "CodexTokenObserver").is_file())
+        self.assertEqual(set(self.app.parent.iterdir()), {old_app, self.app})
 
 
 if __name__ == "__main__":

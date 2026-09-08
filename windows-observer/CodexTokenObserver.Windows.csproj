@@ -9,11 +9,18 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>CodexTokenObserver</AssemblyName>
     <RootNamespace>TokenObserver</RootNamespace>
-    <Version>0.2.1</Version>
+    <Version>0.3.0</Version>
+    <Title>Zuno</Title>
+    <Product>Zuno</Product>
+    <Description>A quiet desktop companion for local Codex token usage.</Description>
+    <ApplicationIcon>../assets/branding/Zuno.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <Deterministic>true</Deterministic>
     <PathMap>$(MSBuildProjectDirectory)=/src/windows-observer</PathMap>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="../assets/branding/Zuno.ico" Link="Resources/Zuno.ico" />
+  </ItemGroup>
 </Project>

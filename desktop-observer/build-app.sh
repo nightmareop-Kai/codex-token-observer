@@ -2,7 +2,8 @@
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
-APP_DIR="$PROJECT_ROOT/dist/Codex Token Observer.app"
+APP_NAME="Zuno"
+APP_DIR="$PROJECT_ROOT/dist/$APP_NAME.app"
 SOURCE_DIR="$PROJECT_ROOT/src"
 cd "$SCRIPT_DIR"
 BUILD_OPTIONS=(-c release --arch arm64 -Xswiftc -file-prefix-map -Xswiftc "$PROJECT_ROOT=/codex-token-observer")
@@ -19,7 +20,7 @@ fi
 mkdir -p "$PROJECT_ROOT/dist"
 STAGING_DIR="$(mktemp -d "$PROJECT_ROOT/dist/.observer-build.XXXXXX")"
 trap 'rm -rf -- "$STAGING_DIR"' EXIT
-STAGED_APP="$STAGING_DIR/Codex Token Observer.app"
+STAGED_APP="$STAGING_DIR/$APP_NAME.app"
 CONTENTS="$STAGED_APP/Contents"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/counter"
 cp -X "$EXECUTABLE" "$CONTENTS/MacOS/CodexTokenObserver"
@@ -27,6 +28,7 @@ cp -X "$EXECUTABLE" "$CONTENTS/MacOS/CodexTokenObserver"
 # can retain absolute object-file paths. Remove debug symbols before signing.
 strip -S "$CONTENTS/MacOS/CodexTokenObserver"
 cp -X "$SCRIPT_DIR/Info.plist" "$CONTENTS/Info.plist"
+cp -X "$SCRIPT_DIR/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 cp -X "$PROJECT_ROOT/LICENSE" "$CONTENTS/Resources/LICENSE"
 cp -X "$PROJECT_ROOT/PRIVACY.md" "$CONTENTS/Resources/PRIVACY.md"
 

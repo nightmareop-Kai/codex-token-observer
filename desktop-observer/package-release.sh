@@ -17,7 +17,7 @@ if [[ "$VERSION" != "$BUNDLE_VERSION" ]]; then
     print -u2 -- "Requested version $VERSION does not match Info.plist ($BUNDLE_VERSION)."
     exit 1
 fi
-APP_NAME="Codex Token Observer"
+APP_NAME="Zuno"
 APP_DIR="$PROJECT_ROOT/dist/$APP_NAME.app"
 RELEASE_DIR="$PROJECT_ROOT/release"
 ZIP_NAME="$APP_NAME-$VERSION-macos-arm64.zip"

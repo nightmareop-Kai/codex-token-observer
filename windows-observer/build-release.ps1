@@ -32,7 +32,7 @@ if ($null -eq $windowsVersion -or $windowsVersion.InnerText -ne $Version) {
 $pythonVersion = '3.14.7'
 $pythonArchiveUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
 $pythonArchiveSha256 = 'd297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15'
-$zipName = "Codex-Token-Observer-$Version-windows-x64.zip"
+$zipName = "Zuno-$Version-windows-x64.zip"
 $releaseDirectory = Join-Path $projectRoot 'release'
 $diagnosticsDirectory = Join-Path $projectRoot '.qa/windows-build'
 [void][IO.Directory]::CreateDirectory($releaseDirectory)
@@ -49,7 +49,7 @@ $lock = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Wr
 $stagingDirectory = Join-Path $releaseDirectory ('.windows-stage-' + [Guid]::NewGuid().ToString('N'))
 try {
     [void][IO.Directory]::CreateDirectory($stagingDirectory)
-    $bundle = Join-Path $stagingDirectory 'Codex Token Observer'
+    $bundle = Join-Path $stagingDirectory 'Zuno'
     $nugetPackages = Join-Path $stagingDirectory 'nuget'
     $publishArguments = @(
         'publish', $projectFile, '--configuration', 'Release',

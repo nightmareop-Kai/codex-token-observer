@@ -26,7 +26,7 @@ def render_status(store: TokenStore, *, clear: bool = False) -> None:
     totals = store.totals(datetime.now().astimezone())
     if clear and sys.stdout.isatty():
         print("\033[2J\033[H", end="")
-    print("CODEX TOKEN COUNTER")
+    print("ZUNO / CODEX TOKEN COUNTER")
     print()
     print(f"TODAY  {format_tokens(totals.today):>18}")
     print(f"TOTAL  {format_tokens(totals.total):>18}")
@@ -105,31 +105,42 @@ def watch(args: argparse.Namespace) -> int:
 def stream(args: argparse.Namespace) -> int:
     """Continuously emit machine-readable snapshots for the desktop observer."""
     store = open_store(args)
+    network = None
     try:
         installed_at_text = store.ensure_initialized(datetime.now().astimezone())
         installed_at = parse_timestamp(installed_at_text)
-        previous: tuple | None = None
-        while True:
-            scan_sessions(
-                store=store,
-                sessions_root=Path(args.sessions).expanduser().resolve(),
-                installed_at=installed_at,
-            )
-            now = datetime.now().astimezone()
-            totals = store.totals(now)
-            labels = load_project_labels(Path(args.sessions).expanduser().resolve().parent)
-            projects = store.top_projects(None, now=now, order_by="today", project_labels=labels)
-            quota = None
-            if getattr(args, "account_quota", False):
-                from .quota import poll_weekly_quota
+        if getattr(args, "leaderboard", False):
+            from .leaderboard import LeaderboardWorker
 
-                quota = poll_weekly_quota(store, now=now)
+            network = LeaderboardWorker(store.path)
+            network.start()
+        previous: tuple | None = None
+        next_scan = 0.0
+        quota = None
+        while True:
+            if network is None or time.monotonic() >= next_scan:
+                scan_sessions(
+                    store=store,
+                    sessions_root=Path(args.sessions).expanduser().resolve(),
+                    installed_at=installed_at,
+                )
+                now = datetime.now().astimezone()
+                totals = store.totals(now)
+                labels = load_project_labels(Path(args.sessions).expanduser().resolve().parent)
+                projects = store.top_projects(None, now=now, order_by="today", project_labels=labels)
+                if getattr(args, "account_quota", False):
+                    from .quota import poll_weekly_quota
+
+                    quota = poll_weekly_quota(store, now=now)
+                next_scan = time.monotonic() + max(0.05, args.interval)
+            network_snapshot = network.snapshot() if network else {}
             project_snapshot = tuple(
                 (project.path, project.name, project.total, project.today)
                 for project in projects
             )
             snapshot = (totals.today, totals.total, totals.event_count, totals.last_event_at,
-                        project_snapshot, json.dumps(quota, sort_keys=True))
+                        project_snapshot, json.dumps(quota, sort_keys=True),
+                        json.dumps(network_snapshot, sort_keys=True))
             if snapshot != previous:
                 print(json.dumps({
                     "today": totals.today,
@@ -137,6 +148,7 @@ def stream(args: argparse.Namespace) -> int:
                     "event_count": totals.event_count,
                     "last_event_at": totals.last_event_at,
                     "quota": quota,
+                    **network_snapshot,
                     "projects": [
                         {
                             "name": project.name,
@@ -148,11 +160,42 @@ def stream(args: argparse.Namespace) -> int:
                     ],
                 }, separators=(",", ":")), flush=True)
                 previous = snapshot
-            time.sleep(args.interval)
+            delay = max(0, next_scan - time.monotonic())
+            if network:
+                network.changed.wait(min(delay, 1))
+                network.changed.clear()
+            else:
+                time.sleep(delay)
     except KeyboardInterrupt:
         return 0
     finally:
+        if network:
+            network.stop()
         store.close()
+
+
+def profile_command(args: argparse.Namespace) -> int:
+    from .leaderboard import profile_status, register_profile, set_paused
+
+    db_path = Path(args.db).expanduser().resolve()
+    if args.command == "profile-register":
+        profile = register_profile(db_path, args.nickname)
+    elif args.command == "profile-pause":
+        profile = set_paused(db_path, True)
+    elif args.command == "profile-resume":
+        profile = set_paused(db_path, False)
+    else:
+        profile = profile_status(db_path)
+    print(json.dumps({"profile": profile}, ensure_ascii=False, separators=(",", ":")), flush=True)
+    return 0 if not profile.get("error") else 1
+
+
+def leaderboard_read(args: argparse.Namespace) -> int:
+    from .leaderboard import read_leaderboard
+
+    board = read_leaderboard(Path(args.db).expanduser().resolve(), offset=args.offset, limit=args.limit)
+    print(json.dumps(board, ensure_ascii=False, separators=(",", ":")), flush=True)
+    return 0 if board["status"] == "ok" else 1
 
 
 def simulate(args: argparse.Namespace) -> int:
@@ -189,6 +232,15 @@ def build_parser() -> argparse.ArgumentParser:
     stream_parser = subparsers.add_parser("stream", help="Continuously emit JSON snapshots")
     stream_parser.add_argument("--interval", type=float, default=0.5)
     stream_parser.add_argument("--account-quota", action="store_true", help="Read signed-in Codex weekly quota")
+    stream_parser.add_argument("--leaderboard", action="store_true", help="Include public leaderboard and profile state")
+    profile_parser = subparsers.add_parser("profile-register", help="Create a permanent public nickname and join")
+    profile_parser.add_argument("--nickname", required=True)
+    subparsers.add_parser("profile-status", help="Read sanitized local Zuno profile without network access")
+    subparsers.add_parser("profile-pause", help="Pause uploads without deleting identity or usage")
+    subparsers.add_parser("profile-resume", help="Resume uploads with the existing identity")
+    board_parser = subparsers.add_parser("leaderboard-read", help="Read the public yesterday leaderboard")
+    board_parser.add_argument("--offset", type=int, default=0)
+    board_parser.add_argument("--limit", type=int, default=50)
     simulate_parser = subparsers.add_parser("simulate", help="Add a synthetic token event")
     simulate_parser.add_argument("tokens", type=int)
     return parser
@@ -206,6 +258,10 @@ def main() -> int:
         return stream(args)
     if args.command == "simulate":
         return simulate(args)
+    if args.command.startswith("profile-"):
+        return profile_command(args)
+    if args.command == "leaderboard-read":
+        return leaderboard_read(args)
     raise AssertionError(args.command)
 
 

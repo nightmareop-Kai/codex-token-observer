@@ -73,8 +73,8 @@ public sealed class ObserverView : Border
         header.ColumnDefinitions.Add(new ColumnDefinition());
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var brand = new StackPanel { Orientation = Orientation.Horizontal };
-        brand.Children.Add(Label("CODEX", 8, Silver));
-        brand.Children.Add(Label("  /  TOKEN OBSERVER", 8, Secondary));
+        brand.Children.Add(Label("ZUNO", 8, Silver));
+        brand.Children.Add(Label("  /  TOKEN COUNTER", 8, Secondary));
         header.Children.Add(brand);
         var connectionArea = new StackPanel { Orientation = Orientation.Horizontal };
         _connectionDot = new Ellipse { Width = 4, Height = 4, Fill = Brushes.Orange, Margin = new Thickness(0, 0, 5, 0) };
@@ -90,7 +90,7 @@ public sealed class ObserverView : Border
         quotaHeader.ColumnDefinitions.Add(new ColumnDefinition());
         quotaHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var quotaLabels = new StackPanel { Orientation = Orientation.Horizontal };
-        quotaLabels.Children.Add(Label("WEEKLY USAGE", 8, Secondary));
+        quotaLabels.Children.Add(Label("WEEKLY REMAINING", 8, Secondary));
         _quotaStale = Label("STALE", 7, Secondary);
         _quotaStale.Margin = new Thickness(6, 0, 0, 0);
         _quotaStale.Visibility = Visibility.Collapsed;
@@ -247,38 +247,42 @@ public sealed class ObserverView : Border
 
     private void UpdateQuota(QuotaUsage? quota)
     {
-        double? percent = quota is { Available: true } or { Stale: true }
-            ? quota.CumulativePercent ?? quota.CurrentPercent : null;
-        if (percent is double invalid && !double.IsFinite(invalid)) percent = null;
-        if (percent is double finite) percent = Math.Max(0, finite);
-        _overLimit = percent >= 100;
-        var tint = percent is double value ? QuotaBrush(value) : Secondary;
-        _quotaValue.Text = percent is double usage
-            ? (quota?.Estimated == true ? "≈ " : "") + usage.ToString("F0", CultureInfo.InvariantCulture) + "%"
+        // Account resets replace the current allowance. Historical carry and
+        // its estimated flag must not affect the remaining quota display.
+        double? used = quota is { Available: true } or { Stale: true }
+            ? quota.CurrentPercent : null;
+        if (used is double invalid && (!double.IsFinite(invalid) || invalid < 0)) used = null;
+        double? remaining = used is double current ? Math.Clamp(100 - current, 0, 100) : null;
+        _overLimit = used >= 100;
+        var tint = used is double value ? QuotaBrush(value) : Secondary;
+        _quotaValue.Text = remaining is double available
+            ? available.ToString("F0", CultureInfo.InvariantCulture) + "%"
             : "—";
         _quotaValue.Foreground = tint;
         _quotaStale.Visibility = quota?.Stale == true ? Visibility.Visible : Visibility.Collapsed;
         _quotaFill.Background = tint;
-        _quotaFraction = Math.Clamp((percent ?? 0) / 100, 0, 1);
+        _quotaFraction = (remaining ?? 0) / 100;
         UpdateQuotaWidth();
         _today.DigitBrush = _overLimit ? Red : Accent;
         _total.DigitBrush = _overLimit ? Red : Silver;
 
-        var detail = "Waiting for weekly usage. Sign in to Codex to view your account quota.";
-        if (percent is double cumulative)
+        var detail = "Remaining weekly Codex account allowance, not a fixed number of tokens. "
+            + "Follows the account's reported resets at the next refresh. Today and Total token counts are not cleared. ";
+        if (remaining is double left && used is double currentUsage)
         {
-            detail = $"Main Codex account weekly usage. Current window: {quota?.CurrentPercent?.ToString("F0", CultureInfo.InvariantCulture) ?? "—"}%. "
-                + $"Cumulative usage including observed resets: {cumulative.ToString("F0", CultureInfo.InvariantCulture)}%. "
-                + "Earlier resets are not included. Cumulative usage restarts when the weekly window expires.";
-            if (quota?.Estimated == true)
-                detail += " Usage before a reset is estimated from the last sample; activity between samples may be missed.";
+            detail += $"Remaining: {left.ToString("F0", CultureInfo.InvariantCulture)}%. "
+                + $"Used in the current window: {currentUsage.ToString("F0", CultureInfo.InvariantCulture)}%.";
             if (quota?.ResetsAt is double reset && double.IsFinite(reset) && reset is >= -62135596800 and <= 253402300799)
                 detail += " Window ends: " + DateTimeOffset.FromUnixTimeSeconds((long)reset).ToLocalTime()
                     .ToString("MMM d, yyyy HH:mm", CultureInfo.InvariantCulture) + ".";
         }
-        if (quota?.Stale == true) detail += " Showing the last available reading while waiting for an update.";
+        else detail += "Waiting for a valid weekly reading. Sign in to Codex to view your account quota.";
+        if (quota?.Stale == true) detail += remaining.HasValue
+            ? " Showing the last available reading while waiting for an update."
+            : " The last reading is unavailable or invalid; waiting for an update.";
         _quotaSection.ToolTip = detail;
-        AutomationProperties.SetName(_quotaSection, "Weekly usage " + _quotaValue.Text);
+        AutomationProperties.SetName(_quotaSection, "Weekly remaining " + _quotaValue.Text
+            + (quota?.Stale == true ? ", stale" : ""));
     }
 
     private void UpdateQuotaWidth() => _quotaFill.Width = Math.Max(0, _quotaTrack.ActualWidth * _quotaFraction);
@@ -301,7 +305,7 @@ public sealed class ObserverView : Border
         Foreground = color, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.NoWrap
     };
 
-    private static Style CreateScrollBarStyle() => (Style)XamlReader.Parse("""
+    internal static Style CreateScrollBarStyle() => (Style)XamlReader.Parse("""
         <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                TargetType="{x:Type ScrollBar}">

@@ -221,8 +221,8 @@ def _read_account_snapshot(timeout: float = 12.0) -> tuple[dict, dict]:
     try:
         request(1, "initialize", {"clientInfo": {
             "name": "codex_token_observer",
-            "title": "Token Observer",
-            "version": "0.2.1",
+            "title": "Zuno",
+            "version": "0.3.0",
         }})
         send({"method": "initialized"})
         account_result = request(2, "account/read", {"refreshToken": False})

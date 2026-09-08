@@ -6,30 +6,13 @@ struct TokenSnapshot: Decodable {
     let total: Int64
     let projects: [ProjectSnapshot]?
     let quota: QuotaSnapshot?
+    let profile: ZunoProfile?
+    let leaderboard: LeaderboardSnapshot?
 }
 
-struct QuotaSnapshot: Decodable {
-    let available: Bool
-    let currentPercent: Double?
-    let cumulativePercent: Double?
-    let resetsAt: Double?
-    let observedAt: String?
-    let resetCount: Int?
-    let stale: Bool
-    let estimated: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case available, stale, estimated
-        case currentPercent = "current_percent", cumulativePercent = "cumulative_percent"
-        case resetsAt = "resets_at", observedAt = "observed_at", resetCount = "reset_count"
-    }
-
-    var percent: Double? { available || stale ? cumulativePercent : nil }
-    var isOverLimit: Bool { (percent ?? 0) >= 100 }
-
+extension QuotaSnapshot {
     var tint: Color {
-        guard let percent else { return ObserverStyle.secondary }
-        let value = max(0, min(100, percent))
+        guard let value = usedPercent else { return ObserverStyle.secondary }
         let green = (0.30, 0.78, 0.52)
         let yellow = (0.96, 0.78, 0.30)
         let red = (0.98, 0.35, 0.34)
@@ -41,18 +24,6 @@ struct QuotaSnapshot: Decodable {
                      blue: start.2 + (end.2 - start.2) * t)
     }
 
-    var detail: String {
-        guard let currentPercent, let percent else { return "Waiting for weekly usage. Sign in to Codex to view your account quota." }
-        var detail = "Main Codex account weekly usage. Current window: \(String(format: "%.0f", currentPercent))%. Cumulative usage including observed resets: \(String(format: "%.0f", percent))%."
-        if estimated { detail += " Usage before a reset is estimated from the last sample; activity between samples may be missed." }
-        detail += " Earlier resets are not included. Cumulative usage restarts when the weekly window expires."
-        if let resetsAt {
-            let dateStyle = Date.FormatStyle(date: .abbreviated, time: .shortened).locale(Locale(identifier: "en_US"))
-            detail += " Window ends: \(Date(timeIntervalSince1970: resetsAt).formatted(dateStyle))."
-        }
-        if stale { detail += " Showing the last available reading while waiting for an update." }
-        return detail
-    }
 }
 
 struct ProjectSnapshot: Decodable, Identifiable {
@@ -73,6 +44,16 @@ final class TokenModel: ObservableObject {
     @Published var total: Double = 0
     @Published var projects: [ProjectSnapshot] = []
     @Published var quota: QuotaSnapshot?
+    @Published var profile: ZunoProfile?
+    @Published var leaderboard = LeaderboardSnapshot()
+    @Published var leaderboardOffset = 0
+    @Published var leaderboardLoading = false
+    @Published var profileBusy = false
+    @Published var profileRequestError: String?
+    var onNeedsProfile: (() -> Void)?
+    private var promptedForProfile = false
+    private let command = CollectorCommand.bundled()
+    static let leaderboardPageSize = 50
     @Published var showAllProjects = false
     @Published var followsTargetApps = UserDefaults.standard.object(forKey: "followsTargetApps") as? Bool ?? true
     @Published var isConnected = false
@@ -90,24 +71,10 @@ final class TokenModel: ObservableObject {
 
     func start() {
         guard process == nil else { return }
-        let executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
-        let resources = executableURL.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Resources/counter")
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Codex Token Observer", isDirectory: true)
-        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        let database = support.appendingPathComponent("token_counter.sqlite3")
-        let python = Process()
+        try? FileManager.default.createDirectory(at: command.database.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let python = command.makeProcess(arguments: ["stream", "--interval", String(Self.refreshIntervalSeconds),
+                                                      "--account-quota", "--leaderboard"])
         let pipe = Pipe()
-        python.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        python.currentDirectoryURL = resources
-        python.environment = ProcessInfo.processInfo.environment.merging([
-            "PYTHONPATH": resources.appendingPathComponent("src").path,
-            "PYTHONUNBUFFERED": "1"
-        ]) { _, new in new }
-        python.arguments = ["-m", "codex_token_counter.cli", "--db",
-                            database.path,
-                            "stream", "--interval", String(Self.refreshIntervalSeconds), "--account-quota"]
         python.standardOutput = pipe
         python.standardError = FileHandle.nullDevice
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -135,6 +102,13 @@ final class TokenModel: ObservableObject {
             outputBuffer.removeSubrange(...newline)
             guard let snapshot = try? JSONDecoder().decode(TokenSnapshot.self, from: line) else { continue }
             quota = snapshot.quota
+            if !profileBusy, let profile = snapshot.profile { receiveProfile(profile) }
+            if let board = snapshot.leaderboard, !leaderboardLoading {
+                if leaderboardOffset == 0 || board.date != leaderboard.date {
+                    leaderboardOffset = 0
+                    leaderboard = board
+                }
+            }
             lastRealToday = Double(snapshot.today)
             lastRealTotal = Double(snapshot.total)
             let displayedTotal = demoTotalEnabled
@@ -201,6 +175,64 @@ final class TokenModel: ObservableObject {
                     guard !Task.isCancelled else { return }
                     self.replayDualCounterDemo()
                 }
+            }
+        }
+    }
+
+    private func receiveProfile(_ value: ZunoProfile) {
+        profile = value
+        if value.error == nil { profileRequestError = nil }
+        if !promptedForProfile && !value.isRegistered {
+            promptedForProfile = true
+            onNeedsProfile?()
+        }
+    }
+
+    func registerProfile(nickname: String) {
+        guard !profileBusy, profile?.isRegistered != true,
+              let name = ZunoProfile.normalizedNickname(nickname) else { return }
+        performProfileCommand(["profile-register", "--nickname", name])
+    }
+
+    func toggleLeaderboardSync() {
+        guard profile?.isRegistered == true else { return }
+        performProfileCommand([profile?.isPaused == true ? "profile-resume" : "profile-pause"])
+    }
+
+    private func performProfileCommand(_ arguments: [String]) {
+        guard !profileBusy else { return }
+        profileBusy = true; profileRequestError = nil
+        Task { @MainActor in
+            let data = await command.run(arguments: arguments)
+            defer { profileBusy = false }
+            struct Reply: Decodable { let profile: ZunoProfile?; let error: String? }
+            guard let data, let reply = try? JSONDecoder().decode(Reply.self, from: data), let profile = reply.profile else {
+                profileRequestError = ZunoProfile.message(for: "offline")
+                return
+            }
+            receiveProfile(profile)
+            profileRequestError = ZunoProfile.message(for: reply.error ?? profile.error)
+            if profile.isRegistered { refreshLeaderboard(offset: 0) }
+        }
+    }
+
+    func refreshLeaderboard(offset: Int? = nil) {
+        guard !leaderboardLoading else { return }
+        let requestedOffset = max(0, offset ?? leaderboardOffset)
+        leaderboardLoading = true
+        Task { @MainActor in
+            let data = await command.run(arguments: ["leaderboard-read", "--offset", String(requestedOffset),
+                                                       "--limit", String(Self.leaderboardPageSize)])
+            defer { leaderboardLoading = false }
+            guard let data, let board = try? JSONDecoder().decode(LeaderboardSnapshot.self, from: data) else {
+                leaderboard = leaderboard.asOffline(); return
+            }
+            if board.status == "ok" {
+                leaderboard = board; leaderboardOffset = requestedOffset
+            } else if leaderboard.entries.isEmpty {
+                leaderboard = board
+            } else {
+                leaderboard = leaderboard.asOffline()
             }
         }
     }
@@ -435,7 +467,7 @@ struct WeeklyQuotaRow: View {
     var body: some View {
         VStack(spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("WEEKLY USAGE")
+                Text("WEEKLY REMAINING")
                     .font(.custom("Avenir Next Condensed", size: 8).weight(.semibold))
                     .tracking(1.1)
                     .foregroundStyle(ObserverStyle.secondary)
@@ -443,8 +475,8 @@ struct WeeklyQuotaRow: View {
                     Text("STALE").font(.system(size: 7)).foregroundStyle(ObserverStyle.secondary)
                 }
                 Spacer()
-                if let percent = quota?.percent {
-                    Text((quota?.estimated == true ? "≈ " : "") + String(format: "%.0f%%", percent))
+                if let percent = quota?.remainingPercent {
+                    Text(String(format: "%.0f%%", percent))
                         .font(.custom("Avenir Next Condensed", size: 11).weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(tint)
@@ -456,12 +488,12 @@ struct WeeklyQuotaRow: View {
             GeometryReader { geometry in
                 Capsule().fill(ObserverStyle.secondary.opacity(0.15))
                 Capsule().fill(tint)
-                    .frame(width: geometry.size.width * min(1, max(0, (quota?.percent ?? 0) / 100)))
+                    .frame(width: geometry.size.width * ((quota?.remainingPercent ?? 0) / 100))
                     .shadow(color: tint.opacity(0.15), radius: 3)
             }
             .frame(height: 2)
         }
-        .help(quota?.detail ?? "Reading weekly account usage…")
+        .help(quota?.detail ?? "Reading weekly account allowance…")
         .accessibilityElement(children: .combine)
     }
 }
@@ -479,9 +511,19 @@ struct ObserverContent: View {
     var appearance: ObserverAppearance = .classic
     var onToggleProjects: () -> Void = {}
     var onSelectAppearance: (ObserverAppearance) -> Void = { _ in }
+    var page: ObserverPage = .counter
+    var leaderboardSnapshot = LeaderboardSnapshot()
+    var profile: ZunoProfile?
+    var leaderboardOffset = 0
+    var leaderboardLoading = false
+    var onRefreshLeaderboard: () -> Void = {}
+    var onLeaderboardPage: (Int) -> Void = { _ in }
+    var onProfile: () -> Void = {}
+    var onTogglePage: () -> Void = {}
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var projectsHovered = false
 
-    private var warningTint: Color? { quota?.isOverLimit == true ? quota?.tint : nil }
+    private var warningTint: Color? { quota?.isExhausted == true ? quota?.tint : nil }
 
     private var visibleProjects: [ProjectSnapshot] { showAllProjects ? projects : Array(projects.prefix(3)) }
 
@@ -497,14 +539,34 @@ struct ObserverContent: View {
             }
         }
         .environment(\.locale, Locale(identifier: "en"))
+        // Counter stays mounted and determines both pages' footprint.
+        .opacity(page == .counter ? 1 : 0)
+        .allowsHitTesting(page == .counter)
+        .accessibilityHidden(page != .counter)
+        .environment(\.pageInteractionsEnabled, page == .counter)
+        .overlay {
+            if page == .leaderboard {
+                GeometryReader { geometry in
+                    LeaderboardContent(snapshot: leaderboardSnapshot, appearance: appearance,
+                                       showPanelBackground: showPanelBackground,
+                                       onBack: onTogglePage, onSelectAppearance: onSelectAppearance,
+                                       profile: profile, offset: leaderboardOffset,
+                                       loading: leaderboardLoading, onRefresh: onRefreshLeaderboard,
+                                       onPage: onLeaderboardPage, onProfile: onProfile)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: page)
     }
 
     private var classicContent: some View {
         VStack(alignment: .trailing, spacing: 0) {
             HStack(spacing: 6) {
-                Text("CODEX")
+                Text("ZUNO")
                     .foregroundStyle(ObserverStyle.silver.opacity(0.9))
-                Text("/  TOKEN OBSERVER")
+                Text("/  TOKEN COUNTER")
                     .foregroundStyle(ObserverStyle.secondary.opacity(0.75))
                 Spacer()
                 Circle().fill(isConnected ? ObserverStyle.accent : Color.orange)
@@ -550,6 +612,7 @@ struct ObserverContent: View {
             .onHover { projectsHovered = $0 }
             .help(showAllProjects ? "Ranked by today's usage. Click to show only the top three." : "Show all projects, ranked by today's usage.")
             .accessibilityLabel(showAllProjects ? "Collapse project list" : "Show all \(projects.count) projects")
+            .background(PageInteractionExclusion())
 
             ScrollView(.vertical) {
                 LazyVStack(spacing: 6) {
@@ -563,6 +626,7 @@ struct ObserverContent: View {
             .scrollIndicators(showAllProjects ? .automatic : .hidden)
             .scrollDisabled(!showAllProjects)
             .frame(height: showAllProjects ? ObserverStyle.expandedProjectHeight : ObserverStyle.compactProjectHeight)
+            .background(PageInteractionExclusion())
             .overlay {
                 if projects.isEmpty {
                     Text(isConnected ? "Waiting for project activity" : "Reading local activity…")
@@ -593,10 +657,13 @@ struct ObserverContent: View {
 
 struct ObserverView: View {
     @ObservedObject var model: TokenModel
+    @ObservedObject var navigation: PanelNavigation
     let onHide: () -> Void
     let onProjectsExpanded: (Bool) -> Void
     let onToggleFollowing: () -> Void
     let onSelectAppearance: (ObserverAppearance) -> Void
+    let onTogglePage: () -> Void
+    let onProfile: () -> Void
 
     var body: some View {
         ObserverContent(today: model.today, total: model.total, projects: model.projects,
@@ -605,10 +672,30 @@ struct ObserverView: View {
                         onToggleProjects: {
                             model.showAllProjects.toggle()
                             onProjectsExpanded(model.showAllProjects)
-                        }, onSelectAppearance: onSelectAppearance)
+                        }, onSelectAppearance: onSelectAppearance,
+                        page: navigation.page, leaderboardSnapshot: model.leaderboard,
+                        profile: model.profile, leaderboardOffset: model.leaderboardOffset,
+                        leaderboardLoading: model.leaderboardLoading,
+                        onRefreshLeaderboard: { model.refreshLeaderboard() },
+                        onLeaderboardPage: { model.refreshLeaderboard(offset: $0) }, onProfile: onProfile,
+                        onTogglePage: onTogglePage)
         .contentShape(Rectangle())
         .onAppear { model.start() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            model.refreshLeaderboard(offset: 0)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
+            model.refreshLeaderboard(offset: 0)
+        }
         .contextMenu {
+            Button(navigation.page.switchTitle, action: onTogglePage)
+            Button("Your Zuno profile", action: onProfile)
+            if model.profile?.isRegistered == true {
+                Button(model.profile?.isPaused == true ? "Resume leaderboard sync" : "Pause leaderboard sync") {
+                    model.toggleLeaderboardSync()
+                }.disabled(model.profileBusy)
+            }
+            Divider()
             Button("Hide Window", action: onHide)
             Menu("Appearance") {
                 AppearanceOptions(appearance: model.appearance, onSelect: onSelectAppearance)
@@ -623,9 +710,24 @@ struct ObserverView: View {
 
 enum Corner: String { case left, right }
 
+struct ProfileWindowContent: View {
+    @ObservedObject var model: TokenModel
+    let onClose: () -> Void
+    var body: some View {
+        ProfileContent(profile: model.profile, busy: model.profileBusy,
+                       requestError: model.profileRequestError,
+                       onRegister: model.registerProfile, onToggleSync: model.toggleLeaderboardSync,
+                       onClose: onClose)
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let model = TokenModel()
+    private let navigation = PanelNavigation()
+    private var pageGesture: PanelPageGesture?
+    private var pageItems: [NSMenuItem] = []
+    private var profileWindow: NSWindow?
     private var panel: NSPanel!
     private var statusItem: NSStatusItem!
     private var visibilityItems: [NSMenuItem] = []
@@ -642,15 +744,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         #if DEBUG
         if ObserverPreview.runIfRequested() { NSApp.terminate(nil); return }
         #endif
-        NSApp.setActivationPolicy(.accessory)
+        // Keep the compact panel, but expose a normal app entry in the Dock
+        // and Command-Tab so a hidden observer can always be found again.
+        NSApp.setActivationPolicy(.regular)
+        model.onNeedsProfile = { [weak self] in self?.showProfile() }
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 328, height: 280),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = "Zuno"
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
         panel.level = .normal
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isMovableByWindowBackground = true; panel.hidesOnDeactivate = false
         panel.delegate = self
-        let contentView = NSHostingView(rootView: ObserverView(model: model, onHide: { [weak self] in
+        let contentView = NSHostingView(rootView: ObserverView(model: model, navigation: navigation, onHide: { [weak self] in
             self?.hidePanel()
         }, onProjectsExpanded: { [weak self] expanded in
             self?.resizeProjectList(expanded: expanded)
@@ -658,8 +764,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.toggleForegroundFollowing()
         }, onSelectAppearance: { [weak self] appearance in
             self?.selectAppearance(appearance)
+        }, onTogglePage: { [weak self] in
+            self?.togglePage()
+        }, onProfile: { [weak self] in
+            self?.showProfile()
         }))
         panel.contentView = contentView
+        pageGesture = PanelPageGesture(host: contentView) { [weak self] in self?.togglePage() }
         compactPanelSize = contentView.fittingSize
         contentView.sizingOptions = []
         panel.setContentSize(compactPanelSize)
@@ -667,8 +778,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         move(to: Corner(rawValue: UserDefaults.standard.string(forKey: "corner") ?? "right") ?? .right)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "number.square", accessibilityDescription: "Token Observer")
-        statusItem.button?.toolTip = "Codex Token Observer"
+        statusItem.button?.image = NSImage(systemSymbolName: "number.square", accessibilityDescription: "Zuno")
+        statusItem.button?.toolTip = "Zuno"
         statusItem.menu = makeMenu()
         panel.contentView?.menu = makeMenu()
         updateMenuState()
@@ -682,6 +793,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        pageItems.append(addItem(to: menu, title: navigation.page.switchTitle, action: #selector(togglePage)))
+        addItem(to: menu, title: "Your Zuno profile", action: #selector(showProfile))
+        menu.addItem(.separator())
         let visibilityItem = addItem(to: menu, title: "Hide Window", action: #selector(togglePanelVisibility))
         visibilityItems.append(visibilityItem)
         let appearanceMenu = NSMenu()
@@ -704,7 +818,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         demoItems.append(demoItem)
         addItem(to: menu, title: "Replay Counter Animation", action: #selector(replayDualDemo))
         menu.addItem(.separator())
-        addItem(to: menu, title: "Quit Token Observer", action: #selector(quit), keyEquivalent: "q")
+        addItem(to: menu, title: "Quit Zuno", action: #selector(quit), keyEquivalent: "q")
         return menu
     }
 
@@ -716,24 +830,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        pageGesture?.stop()
         foregroundPolicy?.stop()
         model.stop()
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard panel != nil else { return false }
+        showPanel()
+        return false
+    }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if navigation.page == .leaderboard { model.refreshLeaderboard() }
+        // Activation may follow a Dock click. Raise a visible panel without
+        // undoing an explicit Hide Window merely because our menu activates.
+        guard panel?.isVisible == true else { return }
+        panel.orderFrontRegardless()
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Hiding/closing the widget must not terminate background collection.
+        false
+    }
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        addItem(to: menu, title: "Show Window", action: #selector(showPanel))
+        if panel?.isVisible == true {
+            addItem(to: menu, title: "Hide Window", action: #selector(hidePanel))
+        }
+        return menu
+    }
+    @objc private func showPanel() {
+        guard panel != nil else { return }
+        NSApp.unhide(nil)
         panel.orderFrontRegardless()
         updateMenuState()
-        return false
+    }
+    @objc private func togglePage() {
+        navigation.toggle()
+        if navigation.page == .leaderboard { model.refreshLeaderboard(offset: 0) }
+        updateMenuState()
+    }
+    @objc private func showProfile() {
+        if let window = profileWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 364, height: 500),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "Your Zuno profile"
+        window.isReleasedWhenClosed = false
+        window.titlebarAppearsTransparent = true
+        let host = NSHostingView(rootView: ProfileWindowContent(model: model, onClose: { [weak window] in window?.close() }))
+        window.contentView = host
+        window.setContentSize(host.fittingSize)
+        window.center()
+        profileWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
     @objc private func togglePanelVisibility() {
         if panel.isVisible {
             hidePanel()
         } else {
-            panel.orderFrontRegardless()
-            updateMenuState()
+            showPanel()
         }
     }
-    private func hidePanel() {
+    @objc private func hidePanel() {
         panel.orderOut(nil)
         updateMenuState()
     }
@@ -787,6 +949,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func quit() { NSApp.terminate(nil) }
 
     private func updateMenuState() {
+        pageItems.forEach { $0.title = navigation.page.switchTitle }
         visibilityItems.forEach { $0.title = panel.isVisible ? "Hide Window" : "Show Window" }
         backgroundItems.forEach { $0.state = model.showPanelBackground ? .on : .off }
         demoItems.forEach { $0.state = model.demoTotalEnabled ? .on : .off }

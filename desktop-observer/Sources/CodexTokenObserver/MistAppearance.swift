@@ -46,6 +46,7 @@ struct AppearanceMenu: View {
         .help("Switch appearance · \(appearance.title)")
         .accessibilityLabel("Appearance")
         .accessibilityValue(appearance.title)
+        .background(PageInteractionExclusion())
     }
 }
 
@@ -87,8 +88,8 @@ struct MistObserverContent: View {
     @State private var projectsHovered = false
 
     private var palette: MistPalette { MistPalette(dark: colorScheme == .dark) }
-    private var quotaTint: Color { palette.quotaTint(quota?.percent) }
-    private var warningTint: Color? { quota?.isOverLimit == true ? quotaTint : nil }
+    private var quotaTint: Color { palette.quotaTint(quota?.usedPercent) }
+    private var warningTint: Color? { quota?.isExhausted == true ? quotaTint : nil }
     private var visibleProjects: [ProjectSnapshot] { showAllProjects ? projects : Array(projects.prefix(3)) }
 
     var body: some View {
@@ -99,7 +100,7 @@ struct MistObserverContent: View {
                     .foregroundStyle(palette.accent)
                     .frame(width: 22, height: 22)
                     .background(palette.accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 6))
-                Text("Token Observer")
+                Text("Zuno")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(palette.ink)
                 Spacer(minLength: 4)
@@ -137,6 +138,7 @@ struct MistObserverContent: View {
             .onHover { projectsHovered = $0 }
             .help(showAllProjects ? "Ranked by today's usage. Click to show only the top three." : "Show all projects, ranked by today's usage.")
             .accessibilityLabel(showAllProjects ? "Collapse project list" : "Show all \(projects.count) projects")
+            .background(PageInteractionExclusion())
 
             ScrollView(.vertical) {
                 LazyVStack(spacing: 6) {
@@ -149,6 +151,7 @@ struct MistObserverContent: View {
             .scrollIndicators(showAllProjects ? .automatic : .hidden)
             .scrollDisabled(!showAllProjects)
             .frame(height: showAllProjects ? ObserverStyle.expandedProjectHeight : ObserverStyle.compactProjectHeight)
+            .background(PageInteractionExclusion())
             .overlay {
                 if projects.isEmpty {
                     Text(isConnected ? "Waiting for project activity" : "Reading local activity…")
@@ -179,13 +182,13 @@ struct MistObserverContent: View {
     private var weeklyUsage: some View {
         VStack(spacing: 6) {
             HStack(spacing: 5) {
-                Text("Weekly usage").font(.system(size: 10))
+                Text("Weekly remaining").font(.system(size: 10))
                     .foregroundStyle(palette.secondary)
                 if quota?.stale == true {
                     Text("Stale").font(.system(size: 8)).foregroundStyle(palette.secondary)
                 }
                 Spacer()
-                Text(quota?.percent.map { (quota?.estimated == true ? "≈ " : "") + String(format: "%.0f%%", $0) } ?? "—")
+                Text(quota?.remainingPercent.map { String(format: "%.0f%%", $0) } ?? "—")
                     .font(.system(size: 11, weight: .medium)).monospacedDigit()
                     .foregroundStyle(quotaTint)
             }
@@ -193,11 +196,11 @@ struct MistObserverContent: View {
             GeometryReader { geometry in
                 Capsule().fill(palette.rule)
                 Capsule().fill(quotaTint)
-                    .frame(width: geometry.size.width * min(1, max(0, (quota?.percent ?? 0) / 100)))
+                    .frame(width: geometry.size.width * ((quota?.remainingPercent ?? 0) / 100))
             }
             .frame(height: 3)
         }
-        .help(quota?.detail ?? "Reading weekly account usage…")
+        .help(quota?.detail ?? "Reading weekly account allowance…")
         .accessibilityElement(children: .combine)
     }
 
