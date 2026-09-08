@@ -129,6 +129,10 @@ def request_json(method: str, path: str, *, identity: dict | None = None,
             error = json.loads(exc.read(4096)).get("error")
         except (ValueError, AttributeError, OSError):
             error = None
+        finally:
+            # HTTPError is also a response stream. A bounded read deliberately
+            # leaves larger bodies unread, so always release its socket here.
+            exc.close()
         if 300 <= exc.code < 400:
             error = "redirect_blocked"
         elif not isinstance(error, str) or error not in KNOWN_ERRORS:

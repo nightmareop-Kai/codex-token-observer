@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -413,6 +414,41 @@ class LeaderboardTests(unittest.TestCase):
                 request_json("POST", "/api/v1/installations", identity={"id": str(uuid.uuid4()), "credential": "synthetic"}, payload={})
         self.assertEqual(caught.exception.code, "redirect_blocked")
         self.assertEqual(received, [("/api/v1/installations", "Bearer synthetic")])
+
+    def test_http_errors_close_bounded_body_even_when_read_or_parse_fails(self):
+        class ErrorBody(io.BytesIO):
+            def __init__(self, payload, fail_read=False):
+                super().__init__(payload)
+                self.fail_read = fail_read
+                self.read_sizes = []
+
+            def read(self, size=-1):
+                self.read_sizes.append(size)
+                if self.fail_read:
+                    raise OSError("synthetic-secret-never-emit")
+                return super().read(size)
+
+        cases = [
+            (400, b'{"error":"invalid_nickname"}', False, "invalid_nickname"),
+            (500, b'{"error":{"private":"never-emit"}}', False, "service_error"),
+            (500, b"malformed-json", False, "service_error"),
+            (500, b"x" * 8192, False, "service_error"),
+            (500, b"unreadable", True, "service_error"),
+            (302, b"redirect-body" * 1000, False, "redirect_blocked"),
+        ]
+        for status, payload, fail_read, expected in cases:
+            with self.subTest(status=status, fail_read=fail_read, expected=expected):
+                body = ErrorBody(payload, fail_read)
+                error = urllib.error.HTTPError("https://example.test/error", status, "synthetic", {}, body)
+                with patch.dict(os.environ, {URL_OVERRIDE: "https://example.test"}), \
+                        patch("codex_token_counter.leaderboard.urllib.request.build_opener") as factory:
+                    factory.return_value.open.side_effect = error
+                    with self.assertRaises(LeaderboardError) as caught:
+                        request_json("GET", "/api/v1/leaderboard")
+                self.assertEqual(caught.exception.code, expected)
+                self.assertEqual(body.read_sizes, [4096])
+                self.assertTrue(body.closed)
+                self.assertNotIn("never-emit", str(caught.exception))
 
     def test_real_http_malformed_error_is_sanitized(self):
         def handler(request):
