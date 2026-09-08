@@ -215,6 +215,13 @@ public static class SmokeTest
         Require(labels.Any(label => label.Contains("2026-09-07") && label.Contains("Asia/Shanghai")),
             "Server-provided ranking date and fixed time zone are visible");
         Require(labels.Any(label => label.Contains("You · #58") && label.Contains("Fixture Me")), "Own rank outside this page remains visible");
+        var previousButton = Elements<Button>(host.LeaderboardForTests).Single(button =>
+            AutomationProperties.GetName(button) == "Previous leaderboard page");
+        previousButton.ApplyTemplate(); previousButton.UpdateLayout();
+        Require(!previousButton.IsEnabled && Math.Abs(previousButton.Opacity - 0.35) < 0.001
+            && Elements<Border>(previousButton).All(border => border.Background is null
+                || border.Background is SolidColorBrush brush && brush.Color.A == 0),
+            "Disabled paging stays transparent and dim rather than drawing system-white chrome");
         var requestedOffset = -1;
         void ObservePage(int offset) => requestedOffset = offset;
         host.LeaderboardForTests.PageRequested += ObservePage;
@@ -307,11 +314,15 @@ public static class SmokeTest
             Require(dialog.NameEditableForTests && field.Text == "" && registrations == 0, "Opening onboarding never chooses a nickname or registers");
             Require(Elements<TextBlock>(dialog).Any(label => label.Text.Contains("permanent") && label.Text.Contains("public")), "Permanent nickname and public daily tokens are explained before consent");
             var join = Elements<Button>(dialog).Single(button => Equals(button.Content, "Create & Join"));
+            await RenderSettledElement(dialog, output, "profile-needs-name");
+            Require(join.IsVisible && join.ActualWidth > 0 && join.ActualHeight > 0,
+                "First-launch preview includes the visible Create & Join consent control");
             field.Text = "Fixture User";
             join.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Require(registrations == 1 && requested == "Fixture User", "Only explicit Create & Join requests registration");
             dialog.Apply(new ZunoProfile { Status = "pending", Nickname = "Fixture User" }, true);
             Require(!dialog.NameEditableForTests && !field.IsEnabled, "Pending identity cannot be changed during registration");
+            await RenderSettledElement(dialog, output, "profile-pending");
             join.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Require(registrations == 1, "Busy registration cannot submit twice");
             dialog.Apply(new ZunoProfile { Status = "pending", Nickname = "Fixture User", Error = "offline" });
@@ -320,16 +331,18 @@ public static class SmokeTest
             Require(dialog.NameEditableForTests && Elements<TextBlock>(dialog).Any(label => label.Text.Contains("already taken")), "Only a confirmed name rejection unlocks pre-join input");
             dialog.Apply(new ZunoProfile { Status = "active", Nickname = "Fixture User" });
             Require(!dialog.NameEditableForTests && Elements<Button>(dialog).Any(button => Equals(button.Content, "Pause sync")), "Registered name is immutable with pause control");
+            await RenderSettledElement(dialog, output, "profile-active");
             dialog.Apply(new ZunoProfile { Status = "active", Nickname = "Fixture User", Error = "sync_failed" });
             Require(!dialog.NameEditableForTests && field.Text == "Fixture User"
                 && Elements<TextBlock>(dialog).Any(label => label.Text.Contains("Upload pending"))
                 && Elements<Button>(dialog).Any(button => Equals(button.Content, "Pause sync")),
                 "An active profile with an upload error retains its identity and pause control");
+            await RenderSettledElement(dialog, output, "profile-upload-pending");
             join.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Require(registrations == 1, "Registered profiles never submit a rename");
             dialog.Apply(new ZunoProfile { Status = "paused", Nickname = "Fixture User" });
             Require(!dialog.NameEditableForTests && Elements<Button>(dialog).Any(button => Equals(button.Content, "Resume sync")), "Paused profile keeps the same immutable name");
-            RenderElement(dialog, output, "profile-registered");
+            await RenderSettledElement(dialog, output, "profile-paused");
         }
         finally { dialog.Close(); }
         Require(registrations == 1, "Closing the profile does not create another identity");
@@ -345,11 +358,27 @@ public static class SmokeTest
 
     private static void RenderElement(FrameworkElement element, string output, string name)
     {
+        element.Dispatcher.VerifyAccess();
+        element.UpdateLayout();
+        Require(double.IsFinite(element.ActualWidth) && double.IsFinite(element.ActualHeight)
+            && element.ActualWidth > 0 && element.ActualHeight > 0, name + ": snapshot has a laid-out frame");
         var bitmap = new RenderTargetBitmap((int)Math.Ceiling(element.ActualWidth * 3),
             (int)Math.Ceiling(element.ActualHeight * 3), 288, 288, PixelFormats.Pbgra32);
         bitmap.Render(element);
         var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));
         using var file = File.Create(Path.Combine(output, name + ".png")); png.Save(file);
+    }
+
+    private static async Task RenderSettledElement(FrameworkElement element, string output, string name)
+    {
+        // Property assertions can be correct while WPF still paints the previous
+        // frame. Let measure/arrange, template updates and render work complete
+        // before taking a bitmap, especially after a SizeToContent window shrinks.
+        element.UpdateLayout();
+        element.InvalidateVisual();
+        await element.Dispatcher.InvokeAsync(element.UpdateLayout, DispatcherPriority.Render);
+        await element.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
+        RenderElement(element, output, name);
     }
 
     private static async Task VerifyCollector(string output)

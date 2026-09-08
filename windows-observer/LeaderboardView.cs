@@ -169,6 +169,21 @@ public sealed class LeaderboardView : Border
         var button = new Button { Content = content, FontSize = 9, Foreground = Accent,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             Padding = new Thickness(5, 3, 5, 3), Cursor = Cursors.Hand, ToolTip = accessibleName };
+        // Keep Windows' default disabled/hover chrome off the dark floating card.
+        // A transparent padded root preserves the full hit area; disabled state
+        // dims the same content instead of painting an opaque system rectangle.
+        var root = new FrameworkElementFactory(typeof(Border));
+        root.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        root.SetValue(Border.PaddingProperty, button.Padding);
+        var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+        presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        root.AppendChild(presenter);
+        var template = new ControlTemplate(typeof(Button)) { VisualTree = root };
+        var disabled = new Trigger { Property = IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(OpacityProperty, 0.35));
+        template.Triggers.Add(disabled);
+        button.Template = template;
         AutomationProperties.SetName(button, accessibleName);
         button.Click += (_, _) => action();
         return button;
